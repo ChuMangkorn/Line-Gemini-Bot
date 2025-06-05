@@ -1,0 +1,19 @@
+// /.eslintrc.js
+module.exports = {
+  root: true,
+  env: {
+    es6: true,
+    node: true,
+  },
+  extends: [
+    "eslint:recommended",
+    "google",
+  ],
+  rules: {
+    "quotes": ["error", "double"],
+    "require-jsdoc": "off", // ปิดการใช้งานกฎนี้
+  },
+  parserOptions: {
+    "ecmaVersion": 2020,
+  },
+};
