@@ -1,25 +1,68 @@
-// /functions/utils/request.js
 const axios = require("axios");
-const LINE_HEADER = {
-  "Content-Type": "application/json",
-  "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-};
 
 class Request {
-  loading(userId) {
-    return axios({
-      method: "post",
-      url: "https://api.line.me/v2/bot/chat/loading/start",
-      headers: LINE_HEADER,
-      data: {chatId: userId, loadingSeconds: 10},
-    });
+  getHeaders() {
+    return {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${process.env.CHANNEL_ACCESS_TOKEN}`
+    };
+  }
+  
+  async reply(replyToken, payload, userId = 'unknown') {
+    try {
+      const startTime = Date.now();
+      const response = await axios({
+        method: "post",
+        url: "https://api.line.me/v2/bot/message/reply",
+        headers: this.getHeaders(),
+        data: { replyToken, messages: payload }
+      });
+      const endTime = Date.now();
+      
+      // 📊 บันทึก LINE API Usage
+      const usageData = {
+        timestamp: new Date().toISOString(),
+        userId: userId,
+        apiType: "reply",
+        messageCount: payload.length,
+        latency: endTime - startTime,
+        status: response.status,
+        // คำนวณขนาดข้อความ
+        totalCharacters: payload.reduce((sum, msg) => sum + (msg.text?.length || 0), 0)
+      };
+      
+      console.log("📱 LINE_USAGE:", JSON.stringify(usageData));
+      
+      return response;
+    } catch (error) {
+      console.error("❌ LINE_ERROR:", error.message);
+      throw error;
+    }
   }
 
-  async curl(url) {
+  async loading(userId) {
     try {
-      return await axios({method: "get", url, responseType: "arraybuffer"});
+      const startTime = Date.now();
+      const response = await axios({
+        method: "post",
+        url: "https://api.line.me/v2/bot/chat/loading/start",
+        headers: this.getHeaders(),
+        data: { chatId: userId, loadingSeconds: 5 }
+      });
+      const endTime = Date.now();
+      
+      // 📊 บันทึก Loading API Usage
+      console.log("⏳ LINE_LOADING:", JSON.stringify({
+        timestamp: new Date().toISOString(),
+        userId: userId,
+        apiType: "loading",
+        latency: endTime - startTime
+      }));
+      
+      return response;
     } catch (error) {
-      throw new Error("Could not fetch from URL.");
+      // ไม่ต้องสนใจ Error ของ loading animation
+      return null;
     }
   }
 }
