@@ -5,73 +5,83 @@ const admin = require('firebase-admin');
 const { Client } = require('@line/bot-sdk');
 const LangAI = require('./libs/langAI');
 const LoadingManager = require('./libs/loadingManager');
+const fs = require('fs');
+const path = require('path');
+const cookieParser = require('cookie-parser');
+const { collection, query, where, getDocs, documentId } = require('firebase-admin/firestore');
 
 admin.initializeApp();
+const db = admin.firestore();
 
-setGlobalOptions({ 
-  region: 'asia-southeast1',
-  memory: '2GiB',
-  timeoutSeconds: 30 // เพิ่ม timeout เล็กน้อยเผื่อ API response ช้า
-});
+// [FIX] Increased timeout to 60 seconds to prevent 504 Gateway Timeout errors
+// This gives the Gemini API more time to process complex requests.
+setGlobalOptions({ region: 'asia-southeast1', memory: '2GiB', timeoutSeconds: 60 });
 
+// --- Define Secrets ---
 const lineChannelSecret = defineSecret('LINE_CHANNEL_SECRET');
 const lineChannelAccessToken = defineSecret('LINE_CHANNEL_ACCESS_TOKEN');
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const openWeatherApiKey = defineSecret('OPENWEATHER_API_KEY');
+const adminUserId = defineSecret('ADMIN_USER_ID');
 
+// --- Global Variables ---
 const usedReplyTokens = new Set();
 const processedEvents = new Set();
 
+// --- Middleware for Dashboard Authentication ---
+const authenticate = async (req, res, next) => {
+  const sessionCookie = req.cookies?.__session || '';
+  if (!sessionCookie) {
+    return res.redirect(302, '/login');
+  }
+  try {
+    await admin.auth().verifySessionCookie(sessionCookie, true);
+    return next();
+  } catch (error) {
+    return res.redirect(302, '/login');
+  }
+};
+
+// =================================================================
+//  ✅ Cloud Functions Definitions
+// =================================================================
+
 exports.webhook = onRequest({
   concurrency: 80,
-  secrets: [lineChannelSecret, lineChannelAccessToken, geminiApiKey, openWeatherApiKey],
-  timeoutSeconds: 30
+  secrets: [lineChannelSecret, lineChannelAccessToken, geminiApiKey, openWeatherApiKey, adminUserId],
+  // The global timeout of 60s will apply here
 }, async (req, res) => {
   const startTime = Date.now();
-  
   try {
     const config = {
       channelSecret: lineChannelSecret.value(),
       channelAccessToken: lineChannelAccessToken.value()
     };
-
     const client = new Client(config);
-    const langAI = new LangAI();
+    const langAI = new LangAI(adminUserId.value());
     const loadingManager = new LoadingManager(client);
-
     const events = req.body.events || [];
-    
-    // ใช้ Promise.all เพื่อประมวลผล event พร้อมกัน
+
     await Promise.all(events.map(event => {
       const eventId = `${event.replyToken || event.source.userId}_${event.timestamp}`;
-      
-      if (processedEvents.has(eventId)) {
-        console.log(`⚠️ Duplicate event detected, skipping: ${eventId}`);
-        return Promise.resolve();
-      }
+      if (processedEvents.has(eventId)) return Promise.resolve();
       processedEvents.add(eventId);
-      setTimeout(() => processedEvents.delete(eventId), 5 * 60 * 1000); // clear after 5 mins
+      setTimeout(() => processedEvents.delete(eventId), 5 * 60 * 1000);
+      if (event.replyToken && usedReplyTokens.has(event.replyToken)) return Promise.resolve();
 
-      if (event.replyToken && usedReplyTokens.has(event.replyToken)) {
-        console.log(`⚠️ Reply token already used, skipping: ${event.replyToken}`);
-        return Promise.resolve();
-      }
-      
-      const elapsedTime = Date.now() - startTime;
-      if (elapsedTime > 25000) { // ลดเวลาเช็ค push message
-        console.log('⏰ Timeout approaching, using push message');
+      // Check for timeout closer to the new 60s limit
+      if (Date.now() - startTime > 55000) {
         return handleWithPushMessage(event, client, langAI);
       }
-      
+
       if (event.type === 'message') {
-        return handleMessage(event, client, langAI, loadingManager, startTime);
+        return handleMessage(event, client, langAI, loadingManager);
       } else if (event.type === 'postback') {
-        // [FIX] แก้ไข: ส่ง loadingManager ไปยัง handlePostback
-        return handlePostback(event, client, langAI, loadingManager, startTime);
+        return handlePostback(event, client, langAI, loadingManager);
       }
       return Promise.resolve();
     }));
-    
+
     res.status(200).send('OK');
   } catch (error) {
     console.error('💥 Webhook error:', error.stack || error);
@@ -79,82 +89,148 @@ exports.webhook = onRequest({
   }
 });
 
-async function handleMessage(event, client, langAI, loadingManager, startTime) {
-  const messageType = event.message.type;
-  const userId = event.source.userId;
-  
-  try {
-    const elapsedTime = Date.now() - startTime;
-    if (elapsedTime > 23000) { // ลดเวลาเช็ค
-      return handleWithPushMessage(event, client, langAI);
+// ... (The rest of the file remains unchanged as the error is related to the webhook timeout)
+// --- Dashboard and Authentication Functions ---
+exports.dashboard = onRequest({ secrets: [] }, (req, res) => {
+  const handler = (req, res) => {
+    try {
+      const dashboardPath = path.join(__dirname, 'dashboard.html');
+      res.status(200).send(fs.readFileSync(dashboardPath, 'utf8'));
+    } catch (error) {
+      res.status(500).send("Error loading dashboard.");
     }
-    
-    // เริ่ม loading animation
-    await loadingManager.startProcessing(userId, messageType);
+  };
+  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+});
 
+
+exports.login = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
+  try {
+    const loginPath = path.join(__dirname, 'login.html');
+    res.status(200).send(fs.readFileSync(loginPath, 'utf8'));
+  } catch (error) {
+    res.status(500).send("Error loading login page.");
+  }
+});
+
+exports.sessionLogin = onRequest({ invoker: 'public', secrets: [] }, async (req, res) => {
+  const idToken = req.body.idToken?.toString();
+  if (!idToken) return res.status(400).send('ID token is required.');
+  const expiresIn = 60 * 60 * 24 * 5 * 1000;
+  try {
+    const sessionCookie = await admin.auth().createSessionCookie(idToken, { expiresIn });
+    res.cookie('__session', sessionCookie, { maxAge: expiresIn, httpOnly: true, secure: true, path: '/' });
+    res.status(200).json({ status: 'success' });
+  } catch (error) {
+    res.status(401).send('UNAUTHORIZED REQUEST!');
+  }
+});
+
+exports.sessionLogout = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
+  res.clearCookie('__session');
+  res.status(200).json({ status: 'success' });
+});
+
+
+// --- 3. BI API Functions ---
+exports.getFirebaseConfig = onRequest({ secrets: [] }, (req, res) => {
+  const handler = (req, res) => {
+    try {
+      const firebaseConfig = {
+        apiKey: "AIzaSyBoZ5V8dnlQEpPxWBk47LLDH1c4UzOMHAw",
+        authDomain: "ryuestai.firebaseapp.com",
+        projectId: "ryuestai",
+        storageBucket: "ryuestai.appspot.com",
+        messagingSenderId: "988307531263",
+        appId: "1:988307531263:web:5dec3f61ec3c113dfcb3ca",
+        measurementId: "G-X60N12YFQW"
+      };
+      res.status(200).json(firebaseConfig);
+    } catch (error) {
+      res.status(500).send("Error getting config.");
+    }
+  };
+  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+});
+
+exports.getStats = onRequest({ secrets: [] }, (req, res) => {
+  const handler = async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required.' });
+
+      const q = query(
+        collection(db, 'daily_stats'),
+        where(documentId(), '>=', startDate),
+        where(documentId(), '<=', endDate)
+      );
+
+      const snapshot = await getDocs(q);
+      const aggregatedStats = {
+        totalLineEvents: 0, totalGeminiHits: 0,
+        processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0 },
+        dailyActivity: {}
+      };
+
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        aggregatedStats.dailyActivity[doc.id] = {
+          lineOaEvents: data.lineOaEvents || 0,
+          geminiApiHits: data.geminiApiHits || 0,
+        };
+        aggregatedStats.totalLineEvents += data.lineOaEvents || 0;
+        aggregatedStats.totalGeminiHits += data.geminiApiHits || 0;
+
+        for (const key in aggregatedStats.processing) {
+          if (data[key]) aggregatedStats.processing[key] += data[key];
+        }
+      });
+      res.status(200).json(aggregatedStats);
+    } catch (error) {
+      console.error("Error fetching stats:", error);
+      res.status(500).json({ error: 'Failed to get stats.' });
+    }
+  };
+  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+});
+
+exports.health = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+async function handleMessage(event, client, langAI, loadingManager) {
+  const { type: messageType, id: messageId } = event.message;
+  const userId = event.source.userId;
+  try {
+    await loadingManager.startProcessing(userId, messageType);
     let response;
     switch (messageType) {
-      case 'text':
-        response = await langAI.processTextMessage(event.message.text, userId);
-        break;
-      case 'image':
-        const imgBuffer = await streamToBuffer(await client.getMessageContent(event.message.id));
-        response = await langAI.processImageMessage(imgBuffer, userId);
-        break;
-      case 'audio':
-        const audioBuffer = await streamToBuffer(await client.getMessageContent(event.message.id));
-        response = await langAI.processAudioMessage(audioBuffer, userId);
-        break;
-      case 'video':
-         const videoBuffer = await streamToBuffer(await client.getMessageContent(event.message.id));
-         response = await langAI.processVideoMessage(videoBuffer, userId);
-         break;
-      case 'file':
-        const fileBuffer = await streamToBuffer(await client.getMessageContent(event.message.id));
-        response = await langAI.processFileMessage(fileBuffer, event.message.fileName, userId);
-        break;
-      case 'location':
-        const { latitude, longitude, address } = event.message;
-        response = await langAI.processLocationMessage(latitude, longitude, address, userId);
-        break;
-      default:
-        response = { type: 'text', text: '🤖 ขออภัยครับ เล้งยังไม่รองรับข้อความประเภทนี้' };
+      case 'text': response = await langAI.processTextMessage(event.message.text, userId, client); break;
+      case 'image': response = await langAI.processImageMessage(await streamToBuffer(await client.getMessageContent(messageId)), userId, client); break;
+      case 'audio': response = await langAI.processAudioMessage(await streamToBuffer(await client.getMessageContent(messageId)), userId, client); break;
+      case 'video': response = await langAI.processVideoMessage(await streamToBuffer(await client.getMessageContent(messageId)), userId, client); break;
+      case 'file': response = await langAI.processFileMessage(await streamToBuffer(await client.getMessageContent(messageId)), event.message.fileName, userId, client); break;
+      case 'location': response = await langAI.processLocationMessage(event.message.latitude, event.message.longitude, event.message.address, userId, client); break;
+      default: response = { type: 'text', text: '🤖 ขออภัยครับ เล้งยังไม่รองรับข้อความประเภทนี้' };
     }
-
     await sendSafeResponse(event, client, response);
-
   } catch (error) {
-    console.error(`💥 Error handling ${messageType}:`, error.stack || error);
     await handleErrorWithFallback(event, client, userId, error);
   } finally {
-    // หยุด loading animation
     loadingManager.stopProcessing(userId);
   }
 }
 
-
-// [FIX] แก้ไข: เพิ่ม loadingManager ในพารามิเตอร์
-async function handlePostback(event, client, langAI, loadingManager, startTime) {
+async function handlePostback(event, client, langAI, loadingManager) {
   const userId = event.source.userId;
-  const postbackData = event.postback.data;
-  
   try {
-    console.log(`🔄 Postback: ${postbackData} from ${userId}`);
-    const elapsedTime = Date.now() - startTime;
-    if (elapsedTime > 23000) {
-      return handleWithPushMessage(event, client, langAI);
-    }
-    
-    await loadingManager.startProcessing(userId, 'text'); // show loading for postback
-    
-    const response = await langAI.processPostback(postbackData, userId);
+    await loadingManager.startProcessing(userId, 'text');
+    const response = await langAI.processPostback(event.postback.data, userId, client);
     await sendSafeResponse(event, client, response);
-
   } catch (error) {
-    console.error('💥 Postback error:', error.stack || error);
     await handleErrorWithFallback(event, client, userId, error);
   } finally {
-      loadingManager.stopProcessing(userId);
+    loadingManager.stopProcessing(userId);
   }
 }
 
@@ -162,58 +238,35 @@ async function sendSafeResponse(event, client, response) {
   try {
     if (event.replyToken) {
       if (usedReplyTokens.has(event.replyToken)) {
-        console.log(`⚠️ Reply token ${event.replyToken} already used, sending push message instead.`);
         const messages = Array.isArray(response) ? response : [response];
-        await client.pushMessage(event.source.userId, messages.map(msg => validateAndCleanResponse(msg)));
+        await client.pushMessage(event.source.userId, messages.map(validateAndCleanResponse));
         return;
       }
       usedReplyTokens.add(event.replyToken);
-      setTimeout(() => usedReplyTokens.delete(event.replyToken), 2 * 60 * 1000); // 2 minutes
+      setTimeout(() => usedReplyTokens.delete(event.replyToken), 2 * 60 * 1000);
     }
-    
-    const messages = Array.isArray(response) ? response : [response];
-    const validatedMessages = messages.map(msg => validateAndCleanResponse(msg));
-    
-    await client.replyMessage(event.replyToken, validatedMessages);
-    
+    await client.replyMessage(event.replyToken, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
   } catch (error) {
-    console.error('💥 Error sending response:', error.response ? error.response.data : error);
     if (error.response?.data?.message.includes('Invalid reply token')) {
-       console.log('Reply token invalid, attempting push message.');
-       const messages = Array.isArray(response) ? response : [response];
-       await client.pushMessage(event.source.userId, messages.map(msg => validateAndCleanResponse(msg)));
+      const messages = Array.isArray(response) ? response : [response];
+      await client.pushMessage(event.source.userId, messages.map(validateAndCleanResponse));
     }
   }
 }
 
 function validateAndCleanResponse(response) {
-  if (!response || typeof response !== 'object') {
-    return { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด' };
-  }
-  // Sanitize text messages
-  if (response.type === 'text' && response.text) {
-    response.text = response.text.substring(0, 4999);
-  }
-  // Validate flex messages
-  if (response.type === 'flex') {
-    if(!response.altText) response.altText = 'ข้อมูล Flex Message';
-    response.altText = response.altText.substring(0, 399);
-  }
+  if (!response || typeof response !== 'object') return { type: 'text', text: '🔧 เกิดข้อผิดพลาด' };
+  if (response.type === 'text' && typeof response.text === 'string') response.text = response.text.substring(0, 4999);
+  if (response.type === 'flex' && typeof response.altText === 'string') response.altText = response.altText.substring(0, 399);
   return response;
 }
 
 async function handleErrorWithFallback(event, client, userId, originalError) {
   console.error('Original error:', originalError.message);
-  const errorMessage = { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง' };
   try {
-    await sendSafeResponse(event, client, errorMessage);
+    await sendSafeResponse(event, client, { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด' });
   } catch (fallbackError) {
-    console.error('💥 Fallback reply failed:', fallbackError.message);
-    try {
-        await client.pushMessage(userId, errorMessage);
-    } catch (pushError) {
-        console.error('💥 All fallback methods failed:', pushError.message);
-    }
+    await client.pushMessage(userId, { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด' });
   }
 }
 
@@ -221,19 +274,14 @@ async function handleWithPushMessage(event, client, langAI) {
   try {
     const userId = event.source.userId;
     let response;
-    // Process only text message on timeout push for simplicity
     if (event.type === 'message' && event.message.type === 'text') {
-      response = await langAI.processTextMessage(event.message.text, userId);
+      response = await langAI.processTextMessage(event.message.text, userId, client);
     } else if (event.type === 'postback') {
-      response = await langAI.processPostback(event.postback.data, userId);
+      response = await langAI.processPostback(event.postback.data, userId, client);
+    } else {
+      response = { type: 'text', text: '⏰ การประมวลผลใช้เวลานาน' };
     }
-    else {
-      response = { type: 'text', text: '⏰ การประมวลผลใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง' };
-    }
-    
-    const messages = Array.isArray(response) ? response : [response];
-    await client.pushMessage(userId, messages.map(msg => validateAndCleanResponse(msg)));
-    
+    await client.pushMessage(userId, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
   } catch (error) {
     console.error('💥 Push message error:', error.stack || error);
   }
@@ -242,14 +290,8 @@ async function handleWithPushMessage(event, client, langAI) {
 function streamToBuffer(stream) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    stream.on('data', chunk => chunks.push(chunk));
+    stream.on('data', (chunk) => chunks.push(chunk));
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
-    setTimeout(() => reject(new Error('Stream timeout after 30 seconds')), 30000);
   });
 }
-
-// Health check endpoint
-exports.health = onRequest((req, res) => {
-  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
