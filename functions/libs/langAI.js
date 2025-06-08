@@ -23,185 +23,272 @@ class LangAI {
     this.db = admin.firestore();
     this.weatherService = new WeatherService();
     this.multimodal = new MultimodalProcessor();
-
     this.getSystemPrompt = () => {
       const currentTime = moment().tz('Asia/Tokyo').format('YYYY-MM-DD HH:mm:ss JST');
       const currentDate = moment().tz('Asia/Tokyo').format('dddd, MMMM Do YYYY');
 
-      return `คุณคือ "เล้ง" AI ผู้ช่วยที่ทำได้ทุกอย่างใน LINE... (System prompt content is the same)`;
-    };
+      return `You are "Leng," a brilliant, multilingual AI assistant in LINE, developed to provide the most accurate and helpful answers.
 
+## Core Identity
+- Your name is "เล้ง" (Leng).
+- You are an expert assistant, polite, intelligent, and trustworthy.
+- Your primary function is to be helpful and accurate.
+
+## Language Rules (CRITICAL)
+- **Primary Rule:** You MUST ALWAYS respond in the same language as the user's query.
+- **Example 1:** If the user asks "Hello, how are you?", you must respond in English.
+- **Example 2:** If the user asks "こんにちは、今日の天気は？", you must respond in Japanese.
+- **Example 3:** If the user asks "สบายดีไหม", you must respond in Thai.
+- Do NOT switch back to Thai unless the user switches to Thai first. This rule is your highest priority.
+
+## Operational Principles
+1.  **Accuracy First:** Always provide fact-based information. If uncertain, state "Based on the available information..."
+2.  **Structured Answers:** Format responses for clarity. Use Markdown (headings, lists, bolding) to make answers easy to read.
+3.  **Proactive Assistance:** After answering, suggest relevant follow-up questions or additional information the user might find useful.
+4.  **Emoji Usage:** Use emojis purposefully to enhance understanding (e.g., ✅, 💡, ⚠️), not for decoration.
+
+## Capabilities
+- **Contextual Memory:** Remember previous parts of the conversation and user-submitted files.
+- **Multimodal Processing:** Expertly analyze text, images, audio, video, and documents.
+- **Weather Forecasts:** Provide accurate weather data using the One Call API 3.0.
+- **Current Time:** ${currentDate}, ${currentTime} (JST)`;
+    };
     console.log('✅ เล้ง AI ready!');
   }
 
-  // --- State Management ---
-  async setPendingAction(userId, action) {
+  // --- State & Context Management ---
+  async setContextState(userId, stateData) {
     try {
-      const contextRef = this.db.collection('conversations').doc(userId);
-      await contextRef.set({
-        pendingAction: {
-          action: action,
-          timestamp: admin.firestore.FieldValue.serverTimestamp()
-        }
-      }, { merge: true });
-      console.log(`Set pending action '${action}' for user ${userId}`);
+      const contextRef = this.db.collection('user_states').doc(userId);
+      const dataToSet = {
+        ...stateData,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      };
+      await contextRef.set(dataToSet, { merge: true });
+      console.log(`Set context state for user ${userId}:`, stateData);
     } catch (error) {
-      console.error('Error setting pending action:', error);
+      console.error('Error setting context state:', error);
     }
   }
 
-  async getPendingAction(userId) {
+  async getContextState(userId) {
     try {
-      const doc = await this.db.collection('conversations').doc(userId).get();
-      if (doc.exists && doc.data().pendingAction) {
-        const pending = doc.data().pendingAction;
-        // Timeout pending action after 5 minutes
+      const doc = await this.db.collection('user_states').doc(userId).get();
+      if (doc.exists) {
+        const state = doc.data();
         const now = moment();
-        const actionTime = moment(pending.timestamp.toDate());
-        if (now.diff(actionTime, 'minutes') > 5) {
-          await this.clearPendingAction(userId);
-          return null;
+        const stateTime = moment(state.timestamp.toDate());
+        if (now.diff(stateTime, 'minutes') > 10) {
+          await this.clearContextState(userId);
+          return {};
         }
-        return pending.action;
+        return state;
       }
-      return null;
+      return {};
     } catch (error) {
-      console.error('Error getting pending action:', error);
-      return null;
+      console.error('Error getting context state:', error);
+      return {};
     }
   }
 
-  async clearPendingAction(userId) {
+  async clearContextState(userId) {
     try {
-      const contextRef = this.db.collection('conversations').doc(userId);
-      await contextRef.update({
-        pendingAction: admin.firestore.FieldValue.delete()
-      });
-      console.log(`Cleared pending action for user ${userId}`);
+      await this.db.collection('user_states').doc(userId).delete();
+      console.log(`Cleared context state for user ${userId}`);
     } catch (error) {
-      if (error.code !== 5) { // Ignore 'NOT_FOUND' errors
-        console.error('Error clearing pending action:', error);
-      }
+      console.error('Error clearing context state:', error);
     }
   }
 
-  // --- Query Detection ---
-  detectQueryType(message) {
+  // --- Query Detection & Processing ---
+  isContextualWeatherQuery(message) {
+    const contextualKeywords = ['พรุ่งนี้', 'มะรืน', 'รายสัปดาห์', 'รายชั่วโมง', 'แล้วพรุ่งนี้', 'แล้วอันนี้', 'แล้ว...', 'tomorrow', 'weekly', 'hourly'];
+    const lowerMessage = message.toLowerCase();
+    return contextualKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
+  async processTextMessage(message, userId) {
+    console.log(`Processing message: "${message}" for user: ${userId}`);
+    const contextState = await this.getContextState(userId);
     const lowerMessage = message.toLowerCase();
 
-    // Check for explicit weather keywords
-    if (this.isWeatherQuery(message) && this.weatherService.extractCityFromQuery(message)) {
-      if (lowerMessage.includes('รายสัปดาห์') || lowerMessage.includes('weekly')) return 'weekly_weather';
-      if (lowerMessage.includes('รายชั่วโมง') || lowerMessage.includes('hourly')) return 'hourly_weather';
-      return 'current_weather';
-    }
-
-    // Looser check for weather queries without explicit city names
-    if (this.isWeatherQuery(message)) {
-      return 'current_weather_no_city';
-    }
-
-    if (this.isTimeQuery(message)) return 'time_query';
-
-    return 'general';
-  }
-
-  // --- Message Processing ---
-  async processTextMessage(message, userId) {
-    console.log(`Processing message: "${message}" from user: ${userId}`);
-
     try {
-      // 1. Check for a pending action first
-      const pendingAction = await this.getPendingAction(userId);
-      if (pendingAction === 'request_city_for_weather') {
-        console.log(`Handling pending action with message: "${message}"`);
-        const weatherResponse = await this.weatherService.getCurrentWeather(message);
-
-        if (weatherResponse && weatherResponse.type === 'flex') {
-          await this.clearPendingAction(userId);
-          await this.saveConversationContext(userId, message, 'แสดงสภาพอากาศปัจจุบัน');
-          return weatherResponse;
+      if (contextState.pendingAction === 'request_city_for_weather') {
+        const cityData = this.weatherService.extractCityFromQuery(message);
+        if (cityData) {
+          await this.setContextState(userId, { pendingAction: null, lastMentionedCity: cityData.name });
+          return this.weatherService.getCurrentWeather(message);
         }
-        // If user typed something else, clear the action and process normally
-        await this.clearPendingAction(userId);
+        await this.clearContextState(userId);
       }
 
-      // 2. If no pending action, detect query type normally
-      const queryType = this.detectQueryType(message);
+      if (this.isContextualWeatherQuery(lowerMessage) && contextState.lastMentionedCity) {
+        const fullQuery = `${message} ${contextState.lastMentionedCity}`;
+        if (lowerMessage.includes('รายสัปดาห์') || lowerMessage.includes('weekly')) return this.weatherService.getWeeklyForecast(fullQuery);
+        if (lowerMessage.includes('รายชั่วโมง') || lowerMessage.includes('hourly')) return this.weatherService.getHourlyForecast(fullQuery);
+        const tomorrow = moment().add(1, 'day').format('YYYY-MM-DD');
+        return this.weatherService.getDailyDetailForecast(`daily_detail_${tomorrow}_${contextState.lastMentionedCity}`);
+      }
 
+      const queryType = this.detectQueryType(message);
+      let city;
       switch (queryType) {
         case 'current_weather_no_city':
-          await this.setPendingAction(userId, 'request_city_for_weather');
-          await this.saveConversationContext(userId, message, 'ถามชื่อเมืองสำหรับพยากรณ์อากาศ');
-          return { type: 'text', text: 'คุณต้องการทราบสภาพอากาศของเมืองอะไรครับ? 🏙️' };
+          await this.setContextState(userId, { pendingAction: 'request_city_for_weather' });
+          return { type: 'text', text: 'คุณต้องการทราบสภาพอากาศของเมืองอะไรครับ? (Which city would you like to know the weather for? / どの都市の天気が知りたいですか？)' };
 
         case 'current_weather':
+          city = this.weatherService.extractCityFromQuery(message);
+          await this.setContextState(userId, { lastMentionedCity: city.name });
+          return this.weatherService.getCurrentWeather(message);
+
         case 'weekly_weather':
+          city = this.weatherService.extractCityFromQuery(message);
+          await this.setContextState(userId, { lastMentionedCity: city.name });
+          return this.weatherService.getWeeklyForecast(message);
+
         case 'hourly_weather':
-          const weatherFunctionMap = {
-            'current_weather': this.weatherService.getCurrentWeather,
-            'weekly_weather': this.weatherService.getWeeklyForecast,
-            'hourly_weather': this.weatherService.getHourlyForecast,
-          };
-          const weatherMethod = weatherFunctionMap[queryType].bind(this.weatherService);
-          const response = await weatherMethod(message);
-          await this.saveConversationContext(userId, message, 'แสดงข้อมูลสภาพอากาศ');
-          return response;
+          city = this.weatherService.extractCityFromQuery(message);
+          await this.setContextState(userId, { lastMentionedCity: city.name });
+          return this.weatherService.getHourlyForecast(message);
 
         case 'time_query':
           return this.createProfessionalTimeMessage();
 
-        case 'general':
         default:
-          return await this.processGeneralQuery(message, userId);
+          return this.processGeneralQuery(message, userId);
       }
-
     } catch (error) {
       console.error('Text processing error:', error.stack || error);
-      return { type: 'text', text: '❌ ขออภัยครับ เล้งไม่สามารถประมวลผลข้อความได้ในขณะนี้' };
+      return { type: 'text', text: '❌ ขออภัยค่ะ เล้งไม่สามารถประมวลผลข้อความได้ในขณะนี้' };
     }
   }
 
-  // --- Postback Processing ---
+  detectQueryType(message) {
+    const lowerMessage = message.toLowerCase();
+    if (this.isWeatherQuery(message)) {
+      if (this.weatherService.extractCityFromQuery(message)) {
+        if (lowerMessage.includes('รายสัปดาห์') || lowerMessage.includes('weekly')) return 'weekly_weather';
+        if (lowerMessage.includes('รายชั่วโมง') || lowerMessage.includes('hourly')) return 'hourly_weather';
+        return 'current_weather';
+      }
+      return 'current_weather_no_city';
+    }
+    if (this.isTimeQuery(message)) return 'time_query';
+    return 'general';
+  }
+
   async processPostback(data, userId) {
-    console.log(`Processing postback: "${data}" from user: ${userId}`);
+    console.log(`Processing postback: "${data}" for user: ${userId}`);
     try {
-      await this.clearPendingAction(userId); // Clear any pending actions when a button is pressed
+      await this.clearContextState(userId);
+      const parts = data.split('_');
+      const action = parts[0];
+      const type = parts[1];
+      const payload = parts.slice(2).join('_');
 
-      if (data.startsWith('weekly_forecast_')) {
-        return await this.weatherService.getWeeklyForecast(data);
-      }
-      if (data.startsWith('hourly_forecast_')) {
-        return await this.weatherService.getHourlyForecast(data);
-      }
-      if (data.startsWith('daily_detail_')) {
-        return await this.weatherService.getDailyDetailForecast(data);
+      if (type === 'forecast') {
+        const city = this.weatherService.extractCityFromQuery(payload)
+        if (city) await this.setContextState(userId, { lastMentionedCity: city.name });
+      } else if (action === 'daily' && type === 'detail') {
+        const city = this.weatherService.extractCityFromQuery(payload.split('_').slice(1).join('_'));
+        if (city) await this.setContextState(userId, { lastMentionedCity: city.name });
       }
 
-      const prompt = `${this.getSystemPrompt()}\n\nผู้ใช้กดปุ่ม: ${data}\n\nตอบสนองตามที่ผู้ใช้เลือก`;
+      if (data.startsWith('weekly_forecast_')) return this.weatherService.getWeeklyForecast(data);
+      if (data.startsWith('hourly_forecast_')) return this.weatherService.getHourlyForecast(data);
+      if (data.startsWith('daily_detail_')) return this.weatherService.getDailyDetailForecast(data);
+
+      const prompt = `${this.getSystemPrompt()}\n\nUser pressed a button with data: "${data}". Respond accordingly.`;
       if (this.model) {
         const result = await this.model.generateContent(prompt);
-        const responseText = result.response.text();
-        await this.saveConversationContext(userId, `กดปุ่ม: ${data}`, responseText);
-        return { type: 'text', text: responseText };
+        return { type: 'text', text: result.response.text() };
       }
     } catch (error) {
       console.error('Postback processing error:', error);
-      return { type: 'text', text: '❌ ขออภัยครับ เล้งไม่สามารถประมวลผลการเลือกได้' };
+      return { type: 'text', text: '❌ ขออภัยค่ะ ไม่สามารถประมวลผลการเลือกได้' };
     }
   }
 
+  // --- Multimodal Functions ---
+  async processImageMessage(imageBuffer, userId) {
+    try {
+      const result = await this.multimodal.analyzeImage(imageBuffer, userId);
+      await this.saveFileContext(userId, 'image', 'User sent an image');
+      await this.saveConversationContext(userId, '[User sent an image]', result);
+      return { type: 'text', text: `🖼️ **Image Analysis:**\n\n${result}` };
+    } catch (error) {
+      console.error('Image processing error:', error);
+      return { type: 'text', text: `❌ Sorry, Leng could not analyze the image: ${error.message}` };
+    }
+  }
+
+  async processAudioMessage(audioBuffer, userId) {
+    try {
+      const result = await this.multimodal.analyzeAudio(audioBuffer, userId);
+      await this.saveFileContext(userId, 'audio', 'User sent an audio file');
+      await this.saveConversationContext(userId, '[User sent an audio file]', result);
+      return { type: 'text', text: `🎵 **Audio Analysis:**\n\n${result}` };
+    } catch (error) {
+      console.error('Audio processing error:', error);
+      return { type: 'text', text: `❌ Sorry, Leng could not process the audio: ${error.message}` };
+    }
+  }
+
+  async processVideoMessage(videoBuffer, userId) {
+    try {
+      const result = await this.multimodal.analyzeVideo(videoBuffer, userId);
+      await this.saveFileContext(userId, 'video', 'User sent a video');
+      await this.saveConversationContext(userId, '[User sent a video]', result);
+      return { type: 'text', text: `🎬 **Video Analysis:**\n\n${result}` };
+    } catch (error) {
+      console.error('Video processing error:', error);
+      return { type: 'text', text: `❌ Sorry, Leng could not analyze the video: ${error.message}` };
+    }
+  }
+
+  async processFileMessage(fileBuffer, fileName, userId) {
+    try {
+      const result = await this.multimodal.analyzeDocument(fileBuffer, fileName, userId);
+      await this.saveFileContext(userId, 'document', `Document: ${fileName}`);
+      await this.saveConversationContext(userId, `[User sent a file: ${fileName}]`, result);
+      return { type: 'text', text: `📄 **Summary from "${fileName}":**\n\n${result}` };
+    } catch (error) {
+      console.error('File processing error:', error);
+      return { type: 'text', text: `❌ Sorry, Leng could not read the document "${fileName}": ${error.message}` };
+    }
+  }
+
+  async processLocationMessage(lat, lon, address, userId) {
+    try {
+      const city = { lat, lon, name: address || 'Specified Location', timezone: 'Asia/Bangkok' };
+      const weatherData = await this.weatherService.fetchOneCallApiData(lat, lon);
+      const weatherResponse = this.weatherService.formatCurrentWeather(weatherData, city);
+
+      const prompt = `${this.getSystemPrompt()}\n\nUser sent a location: ${city.name}\n\nProvide helpful information about this location.`;
+      if (this.model) {
+        const result = await this.model.generateContent(prompt);
+        const responseText = result.response.text();
+        await this.saveConversationContext(userId, `[User sent a location: ${city.name}]`, responseText);
+        return [{ type: 'text', text: `📍 **About Your Location:**\n\n${responseText}` }, weatherResponse];
+      }
+      return weatherResponse;
+    } catch (error) {
+      console.error('Location processing error:', error);
+      return { type: 'text', text: '❌ Sorry, could not process the location.' };
+    }
+  }
+
+  // --- Helper Functions ---
   isWeatherQuery(message) {
-    const weatherKeywords = ['อากาศ', 'สภาพอากาศ', 'ฝน', 'แดด', 'หนาว', 'ร้อน', 'เมฆ', 'ลม', 'อุณหภูมิ', 'พยากรณ์', 'weather', 'forecast'];
+    const weatherKeywords = ['อากาศ', 'สภาพอากาศ', 'ฝน', 'แดด', 'หนาว', 'ร้อน', 'เมฆ', 'ลม', 'อุณหภูมิ', 'พยากรณ์', 'weather', 'forecast', '天気'];
     return weatherKeywords.some(keyword => message.toLowerCase().includes(keyword));
   }
 
   isTimeQuery(message) {
-    const timeKeywords = ['เวลา', 'วันที่', 'กี่โมง', 'ตอนนี้', 'time', 'date'];
+    const timeKeywords = ['เวลา', 'วันที่', 'กี่โมง', 'ตอนนี้', 'time', 'date', '時間', '日付'];
     return timeKeywords.some(keyword => message.toLowerCase().includes(keyword));
   }
-
-  // --- (The rest of the functions: createProfessionalTimeMessage, processGeneralQuery, multimodal methods, and memory management methods can remain the same) ---
 
   createProfessionalTimeMessage() {
     const jstTime = moment().tz('Asia/Tokyo');
@@ -215,106 +302,49 @@ class LangAI {
         header: {
           type: 'box',
           layout: 'vertical',
-          contents: [
-            {
-              type: 'text',
-              text: '🕐 เวลาปัจจุบัน',
-              weight: 'bold',
-              size: '2xl',
-              color: '#ffffff'
-            }
-          ],
+          contents: [{ type: 'text', text: '🕐 เวลาปัจจุบัน', weight: 'bold', size: 'xl', color: '#ffffff' }],
           backgroundColor: '#667eea',
-          paddingAll: '24px'
+          paddingAll: '20px'
         },
         body: {
           type: 'box',
           layout: 'vertical',
+          spacing: 'lg',
           contents: [
             {
               type: 'box',
               layout: 'horizontal',
               contents: [
-                {
-                  type: 'text',
-                  text: '🇯🇵',
-                  size: '3xl',
-                  flex: 0
-                },
+                { type: 'text', text: '🇯🇵', size: '3xl', flex: 0, gravity: 'center' },
                 {
                   type: 'box',
                   layout: 'vertical',
+                  margin: 'lg',
                   contents: [
-                    {
-                      type: 'text',
-                      text: 'ญี่ปุ่น (JST)',
-                      weight: 'bold',
-                      size: 'lg',
-                      color: '#333333'
-                    },
-                    {
-                      type: 'text',
-                      text: jstTime.format('HH:mm:ss'),
-                      size: '4xl',
-                      weight: 'bold',
-                      color: '#667eea'
-                    },
-                    {
-                      type: 'text',
-                      text: jstTime.format('dddd, MMMM Do YYYY'),
-                      size: 'md',
-                      color: '#666666'
-                    }
-                  ],
-                  margin: 'lg'
+                    { type: 'text', text: 'ญี่ปุ่น (JST)', weight: 'bold', size: 'md' },
+                    { type: 'text', text: jstTime.format('HH:mm:ss'), size: 'xxl', weight: 'bold', color: '#667eea' },
+                    { type: 'text', text: jstTime.format('dddd, DD MMMM YYYY'), size: 'sm', color: '#888888' }
+                  ]
                 }
-              ],
-              paddingAll: '20px'
+              ]
             },
-            {
-              type: 'separator',
-              color: '#E0E0E0',
-              margin: 'xl'
-            },
+            { type: 'separator' },
             {
               type: 'box',
               layout: 'horizontal',
               contents: [
-                {
-                  type: 'text',
-                  text: '🇹🇭',
-                  size: '3xl',
-                  flex: 0
-                },
+                { type: 'text', text: '🇹🇭', size: '3xl', flex: 0, gravity: 'center' },
                 {
                   type: 'box',
                   layout: 'vertical',
+                  margin: 'lg',
                   contents: [
-                    {
-                      type: 'text',
-                      text: 'ไทย (ICT)',
-                      weight: 'bold',
-                      size: 'lg',
-                      color: '#333333'
-                    },
-                    {
-                      type: 'text',
-                      text: thaiTime.format('HH:mm:ss'),
-                      size: '4xl',
-                      weight: 'bold',
-                      color: '#f093fb'
-                    },
-                    {
-                      type: 'text',
-                      text: thaiTime.format('dddd, MMMM Do YYYY'),
-                      size: 'md',
-                      color: '#666666'
-                    }
-                  ],
-                  margin: 'lg'
+                    { type: 'text', text: 'ไทย (ICT)', weight: 'bold', size: 'md' },
+                    { type: 'text', text: thaiTime.format('HH:mm:ss'), size: 'xxl', weight: 'bold', color: '#f093fb' },
+                    { type: 'text', text: thaiTime.format('dddd, DD MMMM YYYY'), size: 'sm', color: '#888888' }
+                  ]
                 }
-              ],
-              paddingAll: '20px'
+              ]
             }
           ]
         }
@@ -325,97 +355,14 @@ class LangAI {
   async processGeneralQuery(message, userId) {
     try {
       const context = await this.getConversationContext(userId);
-      const fileContext = await this.getFileContext(userId);
-
-      let prompt = this.getSystemPrompt() + `\n\nข้อความจากผู้ใช้: ${message}`;
-
-      if (context) {
-        prompt += `\n\nบริบทการสนทนาก่อนหน้า (5 ข้อความล่าสุด): ${context}`;
-      }
-
-      if (fileContext) {
-        prompt += `\n\nไฟล์ที่เกี่ยวข้อง: ${fileContext.description}`;
-      }
-
-      if (this.model) {
-        const result = await this.model.generateContent(prompt);
-        const response = result.response.text();
-
-        await this.saveConversationContext(userId, message, response);
-
-        return { type: 'text', text: response };
-      }
+      let prompt = this.getSystemPrompt() + `\n\n## Conversation Context\n${context ? context : 'No previous conversation.'}\n\n## User's Query\n${message}`;
+      const result = await this.model.generateContent(prompt);
+      const response = result.response.text();
+      await this.saveConversationContext(userId, message, response);
+      return { type: 'text', text: response };
     } catch (error) {
       console.error('General query processing error:', error);
-      return { type: 'text', text: '❌ ขออภัยครับ เล้งไม่สามารถประมวลผลข้อความได้ในขณะนี้' };
-    }
-  }
-
-  async processImageMessage(imageBuffer, userId) {
-    try {
-      const result = await this.multimodal.analyzeImage(imageBuffer, userId);
-      await this.saveFileContext(userId, 'image', 'รูปภาพที่ผู้ใช้ส่งมา');
-      await this.saveConversationContext(userId, 'ส่งรูปภาพ', result);
-      return { type: 'text', text: `🖼️ เล้งวิเคราะห์รูปภาพแล้ว:\n\n${result}` };
-    } catch (error) {
-      console.error('Image processing error:', error);
-      return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถวิเคราะห์รูปภาพได้: ${error.message}` };
-    }
-  }
-
-  async processAudioMessage(audioBuffer, userId) {
-    try {
-      const result = await this.multimodal.analyzeAudio(audioBuffer, userId);
-      await this.saveFileContext(userId, 'audio', 'ไฟล์เสียงที่ผู้ใช้ส่งมา');
-      await this.saveConversationContext(userId, 'ส่งไฟล์เสียง', result);
-      return { type: 'text', text: `🎵 เล้งประมวลผลเสียงแล้ว:\n\n${result}` };
-    } catch (error) {
-      console.error('Audio processing error:', error);
-      return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถประมวลผลเสียงได้: ${error.message}` };
-    }
-  }
-
-  async processVideoMessage(videoBuffer, userId) {
-    try {
-      const result = await this.multimodal.analyzeVideo(videoBuffer, userId);
-      await this.saveFileContext(userId, 'video', 'วิดีโอที่ผู้ใช้ส่งมา');
-      await this.saveConversationContext(userId, 'ส่งวิดีโอ', result);
-      return { type: 'text', text: `🎬 เล้งวิเคราะห์วิดีโอแล้ว:\n\n${result}` };
-    } catch (error) {
-      console.error('Video processing error:', error);
-      return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถวิเคราะห์วิดีโอได้: ${error.message}` };
-    }
-  }
-
-  async processFileMessage(fileBuffer, fileName, userId) {
-    try {
-      const result = await this.multimodal.analyzeDocument(fileBuffer, fileName, userId);
-      await this.saveFileContext(userId, 'document', `เอกสาร: ${fileName}`);
-      await this.saveConversationContext(userId, `ส่งเอกสาร: ${fileName}`, result);
-      return { type: 'text', text: `📄 เล้งอ่านเอกสาร "${fileName}" แล้ว:\n\n${result}` };
-    } catch (error) {
-      console.error('File processing error:', error);
-      return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถอ่านเอกสาร "${fileName}" ได้: ${error.message}` };
-    }
-  }
-
-  async processLocationMessage(lat, lon, address, userId) {
-    try {
-      const city = { lat, lon, name: address || 'ตำแหน่งที่ระบุ', timezone: 'Asia/Bangkok' }; // Assume Bangkok timezone for unknown locations
-      const weatherData = await this.weatherService.fetchOneCallApiData(lat, lon);
-      const weatherResponse = this.weatherService.formatCurrentWeather(weatherData, city);
-
-      const prompt = `${this.getSystemPrompt()}\n\nผู้ใช้ส่งตำแหน่งมา: ${city.name}\n\nให้ข้อมูลที่เป็นประโยชน์เกี่ยวกับตำแหน่งนี้`;
-      if (this.model) {
-        const result = await this.model.generateContent(prompt);
-        const responseText = result.response.text();
-        await this.saveConversationContext(userId, `ส่งตำแหน่ง: ${city.name}`, responseText);
-        return [{ type: 'text', text: `📍 เล้งได้รับตำแหน่งแล้ว:\n\n${responseText}` }, weatherResponse];
-      }
-      return weatherResponse;
-    } catch (error) {
-      console.error('Location processing error:', error);
-      return { type: 'text', text: '❌ ขออภัยครับ เล้งไม่สามารถประมวลผลตำแหน่งได้' };
+      return { type: 'text', text: '❌ ขออภัยค่ะ ไม่สามารถประมวลผลข้อความได้' };
     }
   }
 
@@ -424,24 +371,19 @@ class LangAI {
       const conversationRef = this.db.collection('conversations').doc(userId);
       const doc = await conversationRef.get();
       let conversations = (doc.exists && doc.data().messages) ? doc.data().messages : [];
+      const timestamp = new Date().toISOString();
 
       conversations.push({
         userMessage,
         aiResponse: typeof aiResponse === 'object' ? JSON.stringify(aiResponse) : aiResponse,
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
+        timestamp: timestamp
       });
 
-      if (conversations.length > 10) {
-        conversations = conversations.slice(-10);
+      if (conversations.length > 20) {
+        conversations = conversations.slice(-20);
       }
 
-      const dataToSet = { messages: conversations };
-      if (doc.exists && doc.data().pendingAction) {
-        dataToSet.pendingAction = doc.data().pendingAction;
-      }
-
-      await conversationRef.set(dataToSet, { merge: true });
-
+      await conversationRef.set({ messages: conversations }, { merge: true });
     } catch (error) {
       console.error('Error saving conversation context:', error);
     }
@@ -451,12 +393,11 @@ class LangAI {
     try {
       const conversationRef = this.db.collection('conversations').doc(userId);
       const doc = await conversationRef.get();
-
       if (doc.exists && doc.data().messages) {
         return doc.data().messages
           .slice(-5)
-          .map(conv => `ผู้ใช้: ${conv.userMessage}\nเล้ง: ${conv.aiResponse}`)
-          .join('\n---\n');
+          .map(conv => `- User: ${conv.userMessage}\n- Leng: ${conv.aiResponse}`)
+          .join('\n\n');
       }
       return null;
     } catch (error) {
@@ -499,4 +440,3 @@ class LangAI {
 }
 
 module.exports = LangAI;
-
