@@ -11,7 +11,7 @@ admin.initializeApp();
 setGlobalOptions({ 
   region: 'asia-southeast1',
   memory: '2GiB',
-  timeoutSeconds: 25
+  timeoutSeconds: 30 // เพิ่ม timeout เล็กน้อยเผื่อ API response ช้า
 });
 
 const lineChannelSecret = defineSecret('LINE_CHANNEL_SECRET');
@@ -25,13 +25,11 @@ const processedEvents = new Set();
 exports.webhook = onRequest({
   concurrency: 80,
   secrets: [lineChannelSecret, lineChannelAccessToken, geminiApiKey, openWeatherApiKey],
-  timeoutSeconds: 25
+  timeoutSeconds: 30
 }, async (req, res) => {
   const startTime = Date.now();
   
   try {
-    console.log('🔥 Webhook received at:', new Date().toISOString());
-
     const config = {
       channelSecret: lineChannelSecret.value(),
       channelAccessToken: lineChannelAccessToken.value()
@@ -43,39 +41,40 @@ exports.webhook = onRequest({
 
     const events = req.body.events || [];
     
-    for (const event of events) {
-      const eventId = `${event.replyToken}_${event.timestamp}`;
+    // ใช้ Promise.all เพื่อประมวลผล event พร้อมกัน
+    await Promise.all(events.map(event => {
+      const eventId = `${event.replyToken || event.source.userId}_${event.timestamp}`;
       
       if (processedEvents.has(eventId)) {
-        console.log('⚠️ Duplicate event detected, skipping');
-        continue;
+        console.log(`⚠️ Duplicate event detected, skipping: ${eventId}`);
+        return Promise.resolve();
       }
-      
       processedEvents.add(eventId);
-      setTimeout(() => processedEvents.delete(eventId), 5 * 60 * 1000);
-      
+      setTimeout(() => processedEvents.delete(eventId), 5 * 60 * 1000); // clear after 5 mins
+
       if (event.replyToken && usedReplyTokens.has(event.replyToken)) {
-        console.log('⚠️ Reply token already used, skipping');
-        continue;
+        console.log(`⚠️ Reply token already used, skipping: ${event.replyToken}`);
+        return Promise.resolve();
       }
       
       const elapsedTime = Date.now() - startTime;
-      if (elapsedTime > 20000) {
+      if (elapsedTime > 25000) { // ลดเวลาเช็ค push message
         console.log('⏰ Timeout approaching, using push message');
-        await handleWithPushMessage(event, client, langAI);
-        break;
+        return handleWithPushMessage(event, client, langAI);
       }
       
       if (event.type === 'message') {
-        await handleMessage(event, client, langAI, loadingManager, startTime);
+        return handleMessage(event, client, langAI, loadingManager, startTime);
       } else if (event.type === 'postback') {
-        await handlePostback(event, client, langAI, startTime);
+        // [FIX] แก้ไข: ส่ง loadingManager ไปยัง handlePostback
+        return handlePostback(event, client, langAI, loadingManager, startTime);
       }
-    }
+      return Promise.resolve();
+    }));
     
     res.status(200).send('OK');
   } catch (error) {
-    console.error('💥 Webhook error:', error);
+    console.error('💥 Webhook error:', error.stack || error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -85,276 +84,105 @@ async function handleMessage(event, client, langAI, loadingManager, startTime) {
   const userId = event.source.userId;
   
   try {
-    console.log(`📨 Processing ${messageType} from ${userId}`);
-    
     const elapsedTime = Date.now() - startTime;
-    if (elapsedTime > 18000) {
-      await handleWithPushMessage(event, client, langAI);
-      return;
+    if (elapsedTime > 23000) { // ลดเวลาเช็ค
+      return handleWithPushMessage(event, client, langAI);
     }
     
+    // เริ่ม loading animation
+    await loadingManager.startProcessing(userId, messageType);
+
+    let response;
     switch (messageType) {
       case 'text':
-        await handleTextMessage(event, client, langAI, loadingManager);
+        response = await langAI.processTextMessage(event.message.text, userId);
         break;
       case 'image':
-        await handleImageMessage(event, client, langAI, loadingManager);
+        const imgBuffer = await streamToBuffer(await client.getMessageContent(event.message.id));
+        response = await langAI.processImageMessage(imgBuffer, userId);
         break;
       case 'audio':
-        await handleAudioMessage(event, client, langAI, loadingManager);
+        const audioBuffer = await streamToBuffer(await client.getMessageContent(event.message.id));
+        response = await langAI.processAudioMessage(audioBuffer, userId);
         break;
       case 'video':
-        await handleVideoMessage(event, client, langAI, loadingManager);
-        break;
+         const videoBuffer = await streamToBuffer(await client.getMessageContent(event.message.id));
+         response = await langAI.processVideoMessage(videoBuffer, userId);
+         break;
       case 'file':
-        await handleFileMessage(event, client, langAI, loadingManager);
+        const fileBuffer = await streamToBuffer(await client.getMessageContent(event.message.id));
+        response = await langAI.processFileMessage(fileBuffer, event.message.fileName, userId);
         break;
       case 'location':
-        await handleLocationMessage(event, client, langAI, loadingManager);
+        const { latitude, longitude, address } = event.message;
+        response = await langAI.processLocationMessage(latitude, longitude, address, userId);
         break;
       default:
-        await sendSafeResponse(event, client, {
-          type: 'text',
-          text: '🤖 ขออภัยครับ เล้งยังไม่รองรับข้อความประเภทนี้'
-        });
+        response = { type: 'text', text: '🤖 ขออภัยครับ เล้งยังไม่รองรับข้อความประเภทนี้' };
     }
+
+    await sendSafeResponse(event, client, response);
+
   } catch (error) {
-    console.error(`💥 Error handling ${messageType}:`, error);
+    console.error(`💥 Error handling ${messageType}:`, error.stack || error);
     await handleErrorWithFallback(event, client, userId, error);
+  } finally {
+    // หยุด loading animation
+    loadingManager.stopProcessing(userId);
   }
 }
 
-async function handleTextMessage(event, client, langAI, loadingManager) {
-  const userId = event.source.userId;
-  const userMessage = event.message.text;
-  
-  try {
-    await loadingManager.startProcessing(userId, 'text');
-    
-    const response = await langAI.processTextMessage(userMessage, userId);
-    
-    await sendSafeResponse(event, client, response);
-    loadingManager.stopProcessing(userId);
-    
-  } catch (error) {
-    loadingManager.stopProcessing(userId);
-    console.error('💥 Text processing error:', error);
-    await handleErrorWithFallback(event, client, userId, error);
-  }
-}
 
-async function handleImageMessage(event, client, langAI, loadingManager) {
-  const userId = event.source.userId;
-  
-  try {
-    await loadingManager.startProcessing(userId, 'image');
-    
-    const messageContent = await client.getMessageContent(event.message.id);
-    const buffer = await streamToBuffer(messageContent);
-    
-    const response = await langAI.processImageMessage(buffer, userId);
-    
-    await sendSafeResponse(event, client, response);
-    loadingManager.stopProcessing(userId);
-    
-  } catch (error) {
-    loadingManager.stopProcessing(userId);
-    await sendSafeResponse(event, client, {
-      type: 'text',
-      text: `🖼️ ขออภัยครับ เล้งไม่สามารถวิเคราะห์รูปภาพได้: ${error.message}`
-    });
-  }
-}
-
-async function handleAudioMessage(event, client, langAI, loadingManager) {
-  const userId = event.source.userId;
-  
-  try {
-    await loadingManager.startProcessing(userId, 'audio');
-    
-    const messageContent = await client.getMessageContent(event.message.id);
-    const buffer = await streamToBuffer(messageContent);
-    
-    const response = await langAI.processAudioMessage(buffer, userId);
-    
-    await sendSafeResponse(event, client, response);
-    loadingManager.stopProcessing(userId);
-    
-  } catch (error) {
-    loadingManager.stopProcessing(userId);
-    await sendSafeResponse(event, client, {
-      type: 'text',
-      text: `🎵 ขออภัยครับ เล้งไม่สามารถประมวลผลเสียงได้: ${error.message}`
-    });
-  }
-}
-
-async function handleVideoMessage(event, client, langAI, loadingManager) {
-  const userId = event.source.userId;
-  
-  try {
-    await loadingManager.startProcessing(userId, 'video');
-    
-    const messageContent = await client.getMessageContent(event.message.id);
-    const buffer = await streamToBuffer(messageContent);
-    
-    const response = await langAI.processVideoMessage(buffer, userId);
-    
-    await sendSafeResponse(event, client, response);
-    loadingManager.stopProcessing(userId);
-    
-  } catch (error) {
-    loadingManager.stopProcessing(userId);
-    await sendSafeResponse(event, client, {
-      type: 'text',
-      text: `🎬 ขออภัยครับ เล้งไม่สามารถวิเคราะห์วิดีโอได้: ${error.message}`
-    });
-  }
-}
-
-async function handleFileMessage(event, client, langAI, loadingManager) {
-  const userId = event.source.userId;
-  
-  try {
-    await loadingManager.startProcessing(userId, 'document');
-    
-    const messageContent = await client.getMessageContent(event.message.id);
-    const buffer = await streamToBuffer(messageContent);
-    
-    const response = await langAI.processFileMessage(buffer, event.message.fileName, userId);
-    
-    await sendSafeResponse(event, client, response);
-    loadingManager.stopProcessing(userId);
-    
-  } catch (error) {
-    loadingManager.stopProcessing(userId);
-    await sendSafeResponse(event, client, {
-      type: 'text',
-      text: `📄 ขออภัยครับ เล้งไม่สามารถประมวลผลไฟล์ได้: ${error.message}`
-    });
-  }
-}
-
-async function handleLocationMessage(event, client, langAI, loadingManager) {
-  const userId = event.source.userId;
-  const { latitude, longitude, address } = event.message;
-  
-  try {
-    await loadingManager.startProcessing(userId, 'location');
-    
-    const response = await langAI.processLocationMessage(latitude, longitude, address, userId);
-    
-    await sendSafeResponse(event, client, response);
-    loadingManager.stopProcessing(userId);
-    
-  } catch (error) {
-    loadingManager.stopProcessing(userId);
-    await handleErrorWithFallback(event, client, userId, error);
-  }
-}
-
-async function handlePostback(event, client, langAI, startTime) {
+// [FIX] แก้ไข: เพิ่ม loadingManager ในพารามิเตอร์
+async function handlePostback(event, client, langAI, loadingManager, startTime) {
   const userId = event.source.userId;
   const postbackData = event.postback.data;
   
   try {
     console.log(`🔄 Postback: ${postbackData} from ${userId}`);
-    
     const elapsedTime = Date.now() - startTime;
-    if (elapsedTime > 18000) {
-      await handleWithPushMessage(event, client, langAI);
-      return;
+    if (elapsedTime > 23000) {
+      return handleWithPushMessage(event, client, langAI);
     }
     
-    if (postbackData.startsWith('weekly_')) {
-      const cityName = postbackData.replace('weekly_', '');
-      const weeklyResponse = await langAI.weatherService.getWeeklyForecast(`รายสัปดาห์ ${cityName}`);
-      await sendSafeResponse(event, client, weeklyResponse);
-      
-    } else if (postbackData.startsWith('detailed_forecast_')) {
-      const cityName = postbackData.replace('detailed_forecast_', '');
-      const detailedResponse = await langAI.weatherService.getDetailedForecast(`รายละเอียด ${cityName}`);
-      await sendSafeResponse(event, client, detailedResponse);
-      
-    } else if (postbackData.startsWith('refresh_')) {
-      const cityName = postbackData.replace('refresh_', '');
-      const refreshedWeather = await langAI.weatherService.getWeatherInfo(`อากาศ ${cityName}`);
-      await sendSafeResponse(event, client, refreshedWeather);
-      
-    } else {
-      const response = await langAI.processPostback(postbackData, userId);
-      await sendSafeResponse(event, client, response);
-    }
+    await loadingManager.startProcessing(userId, 'text'); // show loading for postback
+    
+    const response = await langAI.processPostback(postbackData, userId);
+    await sendSafeResponse(event, client, response);
+
   } catch (error) {
-    console.error('💥 Postback error:', error);
+    console.error('💥 Postback error:', error.stack || error);
     await handleErrorWithFallback(event, client, userId, error);
+  } finally {
+      loadingManager.stopProcessing(userId);
   }
 }
 
 async function sendSafeResponse(event, client, response) {
   try {
     if (event.replyToken) {
+      if (usedReplyTokens.has(event.replyToken)) {
+        console.log(`⚠️ Reply token ${event.replyToken} already used, sending push message instead.`);
+        const messages = Array.isArray(response) ? response : [response];
+        await client.pushMessage(event.source.userId, messages.map(msg => validateAndCleanResponse(msg)));
+        return;
+      }
       usedReplyTokens.add(event.replyToken);
-      setTimeout(() => usedReplyTokens.delete(event.replyToken), 5 * 60 * 1000);
+      setTimeout(() => usedReplyTokens.delete(event.replyToken), 2 * 60 * 1000); // 2 minutes
     }
     
-    const validatedResponse = validateAndCleanResponse(response);
-    const messageSize = JSON.stringify(validatedResponse).length;
+    const messages = Array.isArray(response) ? response : [response];
+    const validatedMessages = messages.map(msg => validateAndCleanResponse(msg));
     
-    if (messageSize > 2800) {
-      console.log(`📏 Message too large (${messageSize} bytes), using fallback`);
-      await client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: response.altText || 'ข้อมูลมีขนาดใหญ่เกินไป กรุณาลองใหม่อีกครั้ง'
-      });
-      return;
-    }
-    
-    await client.replyMessage(event.replyToken, validatedResponse);
+    await client.replyMessage(event.replyToken, validatedMessages);
     
   } catch (error) {
-    console.error('💥 Error sending response:', error);
-    throw error;
-  }
-}
-
-async function handleErrorWithFallback(event, client, userId, originalError) {
-  try {
-    await client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง'
-    });
-  } catch (replyError) {
-    try {
-      await client.pushMessage(userId, {
-        type: 'text',
-        text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด'
-      });
-    } catch (pushError) {
-      console.error('💥 All fallback methods failed:', originalError.message);
+    console.error('💥 Error sending response:', error.response ? error.response.data : error);
+    if (error.response?.data?.message.includes('Invalid reply token')) {
+       console.log('Reply token invalid, attempting push message.');
+       const messages = Array.isArray(response) ? response : [response];
+       await client.pushMessage(event.source.userId, messages.map(msg => validateAndCleanResponse(msg)));
     }
-  }
-}
-
-async function handleWithPushMessage(event, client, langAI) {
-  try {
-    const userId = event.source.userId;
-    
-    let response;
-    if (event.message && event.message.type === 'text') {
-      response = await langAI.processTextMessage(event.message.text, userId);
-    } else {
-      response = {
-        type: 'text',
-        text: '⏰ การประมวลผลใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง'
-      };
-    }
-    
-    const validatedResponse = validateAndCleanResponse(response);
-    await client.pushMessage(userId, validatedResponse);
-    
-  } catch (error) {
-    console.error('💥 Push message error:', error);
   }
 }
 
@@ -362,77 +190,66 @@ function validateAndCleanResponse(response) {
   if (!response || typeof response !== 'object') {
     return { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด' };
   }
-
-  if (response.type === 'text') {
-    return { type: 'text', text: sanitizeText(response.text) };
+  // Sanitize text messages
+  if (response.type === 'text' && response.text) {
+    response.text = response.text.substring(0, 4999);
   }
-
+  // Validate flex messages
   if (response.type === 'flex') {
-    try {
-      const cleanedFlex = cleanFlexMessage(response);
-      const flexSize = JSON.stringify(cleanedFlex).length;
-      
-      if (flexSize > 2500) {
-        return { type: 'text', text: response.altText || 'ข้อมูลมีขนาดใหญ่เกินไป' };
-      }
-      
-      return cleanedFlex;
-    } catch (error) {
-      return { type: 'text', text: response.altText || 'เกิดข้อผิดพลาดในการแสดงผล' };
-    }
+    if(!response.altText) response.altText = 'ข้อมูล Flex Message';
+    response.altText = response.altText.substring(0, 399);
   }
-
   return response;
 }
 
-function cleanFlexMessage(flexMessage) {
-  const jsonString = JSON.stringify(flexMessage, (key, value) => {
-    if (value === undefined) return null;
-    return value;
-  });
-  return JSON.parse(jsonString);
+async function handleErrorWithFallback(event, client, userId, originalError) {
+  console.error('Original error:', originalError.message);
+  const errorMessage = { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง' };
+  try {
+    await sendSafeResponse(event, client, errorMessage);
+  } catch (fallbackError) {
+    console.error('💥 Fallback reply failed:', fallbackError.message);
+    try {
+        await client.pushMessage(userId, errorMessage);
+    } catch (pushError) {
+        console.error('💥 All fallback methods failed:', pushError.message);
+    }
+  }
 }
 
-function sanitizeText(text) {
-  if (!text || typeof text !== 'string') {
-    return '🔧 ขออภัยครับ เกิดข้อผิดพลาด';
+async function handleWithPushMessage(event, client, langAI) {
+  try {
+    const userId = event.source.userId;
+    let response;
+    // Process only text message on timeout push for simplicity
+    if (event.type === 'message' && event.message.type === 'text') {
+      response = await langAI.processTextMessage(event.message.text, userId);
+    } else if (event.type === 'postback') {
+      response = await langAI.processPostback(event.postback.data, userId);
+    }
+    else {
+      response = { type: 'text', text: '⏰ การประมวลผลใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง' };
+    }
+    
+    const messages = Array.isArray(response) ? response : [response];
+    await client.pushMessage(userId, messages.map(msg => validateAndCleanResponse(msg)));
+    
+  } catch (error) {
+    console.error('💥 Push message error:', error.stack || error);
   }
-
-  return text
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-    .substring(0, 1500);
 }
 
 function streamToBuffer(stream) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    
     stream.on('data', chunk => chunks.push(chunk));
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
-    
-    setTimeout(() => reject(new Error('Stream timeout')), 30000);
+    setTimeout(() => reject(new Error('Stream timeout after 30 seconds')), 30000);
   });
 }
 
+// Health check endpoint
 exports.health = onRequest((req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    service: 'เล้ง AI Bot v2.1',
-    region: 'asia-southeast1'
-  });
-});
-
-exports.status = onRequest((req, res) => {
-  res.status(200).json({
-    bot: 'เล้ง AI',
-    version: '2.1.0',
-    features: ['Text', 'Image', 'Audio', 'Video', 'Document', 'Weather', 'Location'],
-    cities: ['กรุงเทพฯ', 'โอตารุ', 'อุสึโนะมิยะ', 'โตเกียว', 'ซัปโปโร'],
-    updated: new Date().toISOString()
-  });
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
