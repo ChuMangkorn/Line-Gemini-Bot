@@ -51,6 +51,18 @@
         "function": "getStats"
       },
       {
+        "source": "/api/blockUser",
+        "function": "blockUser"
+      },
+      {
+        "source": "/api/sendBroadcast",
+        "function": "sendBroadcast"
+      },
+      {
+        "source": "/api/getErrors",
+        "function": "getErrors"
+      },
+      {
         "source": "/health",
         "function": "health"
       }

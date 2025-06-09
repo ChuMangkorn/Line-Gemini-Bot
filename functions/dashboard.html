@@ -4,14 +4,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Leng AI - BI Dashboard</title>
+  <title>Leng AI - Command Center</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/moment@2.30.1/moment.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <style>
     body {
-      background-color: #0f172a;
+      background-color: #020617;
       color: #e2e8f0;
       font-family: 'Inter', sans-serif;
     }
@@ -89,16 +89,15 @@
     <!-- Header -->
     <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
       <div>
-        <h1 class="text-3xl font-bold text-white">Leng AI - BI Dashboard</h1>
-        <p class="text-slate-400 mt-1">Data-driven insights for your AI assistant.</p>
+        <h1 class="text-3xl font-bold text-white">Leng AI Command Center</h1>
+        <p class="text-slate-400 mt-1">BI, Operations, and Management Hub</p>
       </div>
       <div id="admin-menu" class="relative">
-        <button id="admin-menu-button" class="flex items-center space-x-2 p-1 rounded-full hover:bg-slate-700/50">
-          <img id="admin-avatar" src="https://placehold.co/40x40/64748b/e2e8f0?text=A"
-            class="w-10 h-10 rounded-full border-2 border-slate-500">
-          <span id="admin-name" class="font-semibold text-white">Admin</span>
-          <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400"></i>
-        </button>
+        <button id="admin-menu-button" class="flex items-center space-x-2 p-1 rounded-full hover:bg-slate-700/50"><img
+            id="admin-avatar" src="https://placehold.co/40x40/64748b/e2e8f0?text=A"
+            class="w-10 h-10 rounded-full border-2 border-slate-500"><span id="admin-name"
+            class="font-semibold text-white">Admin</span><i data-lucide="chevron-down"
+            class="w-4 h-4 text-slate-400"></i></button>
         <div id="admin-dropdown"
           class="absolute right-0 mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg hidden overflow-hidden">
           <a href="#" id="logout-btn" class="flex items-center px-4 py-2 text-sm text-red-400 hover:bg-slate-700"><i
@@ -109,11 +108,10 @@
 
     <!-- Date Range Filter -->
     <div class="mb-6 flex items-center justify-between">
-      <div id="date-range-filter" class="flex space-x-2 rounded-lg bg-slate-700 p-1">
-        <button class="date-btn px-4 py-1.5 text-sm rounded-md active" data-range="today">Today</button>
-        <button class="date-btn px-4 py-1.5 text-sm rounded-md" data-range="7d">Last 7 Days</button>
-        <button class="date-btn px-4 py-1.5 text-sm rounded-md" data-range="30d">Last 30 Days</button>
-      </div>
+      <div id="date-range-filter" class="flex space-x-2 rounded-lg bg-slate-700 p-1"><button
+          class="date-btn px-4 py-1.5 text-sm rounded-md active" data-range="today">Today</button><button
+          class="date-btn px-4 py-1.5 text-sm rounded-md" data-range="7d">Last 7 Days</button><button
+          class="date-btn px-4 py-1.5 text-sm rounded-md" data-range="30d">Last 30 Days</button></div>
       <p class="text-sm text-slate-400">Last updated: <span id="last-updated" class="font-medium text-slate-300"></span>
       </p>
     </div>
@@ -134,16 +132,16 @@
         <p id="gemini-calls" class="text-4xl font-bold text-white mt-4">0</p>
       </div>
       <div class="stat-card p-6 rounded-lg">
-        <div class="flex items-center"><i data-lucide="users" class="w-8 h-8 text-emerald-400"></i>
-          <p class="ml-4 text-sm font-medium text-slate-400">Unique Users</p>
+        <div class="flex items-center"><i data-lucide="shield-alert" class="w-8 h-8 text-amber-400"></i>
+          <p class="ml-4 text-sm font-medium text-slate-400">Errors</p>
         </div>
-        <p id="unique-users" class="text-4xl font-bold text-white mt-4">0</p>
+        <p id="error-count" class="text-4xl font-bold text-white mt-4">0</p>
       </div>
       <div class="stat-card p-6 rounded-lg">
-        <div class="flex items-center"><i data-lucide="message-square" class="w-8 h-8 text-amber-400"></i>
-          <p class="ml-4 text-sm font-medium text-slate-400">Total Conversations</p>
+        <div class="flex items-center"><i data-lucide="dollar-sign" class="w-8 h-8 text-emerald-400"></i>
+          <p class="ml-4 text-sm font-medium text-slate-400">Est. Gemini Cost</p>
         </div>
-        <p id="total-conversations" class="text-4xl font-bold text-white mt-4">0</p>
+        <p id="est-cost" class="text-4xl font-bold text-white mt-4">$0.00</p>
       </div>
 
       <!-- Charts and Logs -->
@@ -155,20 +153,32 @@
         <h3 class="text-lg font-semibold text-white">Daily Activity</h3>
         <div class="h-64 mt-4 flex items-center justify-center"><canvas id="activity-chart"></canvas></div>
       </div>
-      <div class="stat-card p-6 rounded-lg md:col-span-2 lg:col-span-4">
-        <h3 class="text-lg font-semibold text-white mb-4">Conversation Log</h3>
+
+      <div class="stat-card p-6 rounded-lg md:col-span-2">
+        <h3 class="text-lg font-semibold text-white mb-4">📢 Broadcast Message</h3><textarea id="broadcast-message"
+          class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-white"
+          placeholder="Type a message to send to all users..."></textarea><button id="send-broadcast-btn"
+          class="mt-2 w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-md">Send
+          Broadcast</button>
+      </div>
+      <div class="stat-card p-6 rounded-lg md:col-span-2">
+        <h3 class="text-lg font-semibold text-white mb-4">Recent Errors</h3>
+        <div id="error-log" class="text-xs text-red-400 space-y-2 overflow-y-auto max-h-48"></div>
+      </div>
+
+      <div class="stat-card p-6 rounded-lg col-span-full">
+        <h3 class="text-lg font-semibold text-white mb-4">User & Conversation Log</h3>
         <div class="relative"><i data-lucide="search"
             class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400"></i><input type="text"
             id="search-log" placeholder="Search logs..."
-            class="w-full bg-slate-800 border border-slate-600 rounded-md py-2 pl-10 pr-4 text-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
-        </div>
+            class="w-full bg-slate-800 border border-slate-600 rounded-md py-2 pl-10 pr-4 text-white"></div>
         <div class="mt-4 max-h-[600px] overflow-y-auto">
           <table class="w-full text-left text-sm">
             <thead class="sticky top-0 bg-slate-800">
               <tr>
                 <th class="p-3">User</th>
                 <th class="p-3">Last Message</th>
-                <th class="p-3">Last Response</th>
+                <th class="p-3">Status</th>
                 <th class="p-3 text-center">Actions</th>
               </tr>
             </thead>
@@ -199,19 +209,17 @@
 
     (async function main() {
       try {
-        const firebaseConfig = {
-          apiKey: "AIzaSyBoZ5V8dnlQEpPxWBk47LLDH1c4UzOMHAw",
-          authDomain: "ryuestai.firebaseapp.com",
-          projectId: "ryuestai",
-          storageBucket: "ryuestai.firebasestorage.app",
-          messagingSenderId: "988307531263",
-          appId: "1:988307531263:web:5dec3f61ec3c113dfcb3ca",
-          measurementId: "G-X60N12YFQW"
-        };
+        const response = await fetch(window.location.origin + '/getFirebaseConfig');
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Could not fetch Firebase config. Status: ${response.status}. Body: ${errorText}`);
+        }
+        const firebaseConfig = await response.json();
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
+
 
         const ui = {
           loadingSpinner: document.getElementById('loading-spinner'),
@@ -300,7 +308,8 @@
             });
             updateDashboardUI(stats);
           } catch (error) {
-            console.error("Failed to fetch stats for range:", error);
+            console.error("Initialization failed:", error);
+            document.body.innerHTML = `<div class="text-center p-8 text-red-400"><h1>Dashboard failed to load.</h1><p>${error.message}</p></div>`;
           }
         }
 

@@ -19,7 +19,14 @@ service cloud.firestore {
     match /users/{userId}/profile/{profileInfo} {
       allow get, list: if request.auth != null;
     }
-
+    // Allow Admin to read error logs
+    match /errors/{errorId} {
+      allow get, list: if request.auth != null;
+    }
+    
+    // Allow Admin to write to user block status
+    match /users/{userId}/status/{docId} {
+        allow write: if request.auth != null;
     // Allow backend (via Admin SDK) to write data.
     // The Admin SDK bypasses these rules, but it's good practice to define them.
     // This rule allows the Cloud Function to write to these collections.
@@ -39,4 +46,5 @@ service cloud.firestore {
       allow write: if true;
     }
   }
+}
 }
