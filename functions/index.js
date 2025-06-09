@@ -8,13 +8,11 @@ const LoadingManager = require('./libs/loadingManager');
 const fs = require('fs');
 const path = require('path');
 const cookieParser = require('cookie-parser');
-const { collection, query, where, getDocs, documentId } = require('firebase-admin/firestore');
+const { collection, query, where, getDocs, documentId, orderBy, limit } = require('firebase-admin/firestore');
 
 admin.initializeApp();
 const db = admin.firestore();
 
-// [FIX] Increased timeout to 60 seconds to prevent 504 Gateway Timeout errors
-// This gives the Gemini API more time to process complex requests.
 setGlobalOptions({ region: 'asia-southeast1', memory: '2GiB', timeoutSeconds: 60 });
 
 // --- Define Secrets ---
@@ -49,14 +47,10 @@ const authenticate = async (req, res, next) => {
 exports.webhook = onRequest({
   concurrency: 80,
   secrets: [lineChannelSecret, lineChannelAccessToken, geminiApiKey, openWeatherApiKey, adminUserId],
-  // The global timeout of 60s will apply here
 }, async (req, res) => {
   const startTime = Date.now();
   try {
-    const config = {
-      channelSecret: lineChannelSecret.value(),
-      channelAccessToken: lineChannelAccessToken.value()
-    };
+    const config = { channelSecret: lineChannelSecret.value(), channelAccessToken: lineChannelAccessToken.value() };
     const client = new Client(config);
     const langAI = new LangAI(adminUserId.value());
     const loadingManager = new LoadingManager(client);
@@ -66,22 +60,13 @@ exports.webhook = onRequest({
       const eventId = `${event.replyToken || event.source.userId}_${event.timestamp}`;
       if (processedEvents.has(eventId)) return Promise.resolve();
       processedEvents.add(eventId);
-      setTimeout(() => processedEvents.delete(eventId), 5 * 60 * 1000);
+      setTimeout(() => processedEvents.delete(eventId), 300000);
       if (event.replyToken && usedReplyTokens.has(event.replyToken)) return Promise.resolve();
-
-      // Check for timeout closer to the new 60s limit
-      if (Date.now() - startTime > 55000) {
-        return handleWithPushMessage(event, client, langAI);
-      }
-
-      if (event.type === 'message') {
-        return handleMessage(event, client, langAI, loadingManager);
-      } else if (event.type === 'postback') {
-        return handlePostback(event, client, langAI, loadingManager);
-      }
+      if (Date.now() - startTime > 55000) return handleWithPushMessage(event, client, langAI);
+      if (event.type === 'message') return handleMessage(event, client, langAI, loadingManager);
+      if (event.type === 'postback') return handlePostback(event, client, langAI, loadingManager);
       return Promise.resolve();
     }));
-
     res.status(200).send('OK');
   } catch (error) {
     console.error('💥 Webhook error:', error.stack || error);
@@ -89,28 +74,21 @@ exports.webhook = onRequest({
   }
 });
 
-// ... (The rest of the file remains unchanged as the error is related to the webhook timeout)
-// --- Dashboard and Authentication Functions ---
 exports.dashboard = onRequest({ secrets: [] }, (req, res) => {
   const handler = (req, res) => {
     try {
       const dashboardPath = path.join(__dirname, 'dashboard.html');
       res.status(200).send(fs.readFileSync(dashboardPath, 'utf8'));
-    } catch (error) {
-      res.status(500).send("Error loading dashboard.");
-    }
+    } catch (error) { res.status(500).send("Error loading dashboard."); }
   };
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
-
 
 exports.login = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
   try {
     const loginPath = path.join(__dirname, 'login.html');
     res.status(200).send(fs.readFileSync(loginPath, 'utf8'));
-  } catch (error) {
-    res.status(500).send("Error loading login page.");
-  }
+  } catch (error) { res.status(500).send("Error loading login page."); }
 });
 
 exports.sessionLogin = onRequest({ invoker: 'public', secrets: [] }, async (req, res) => {
@@ -121,9 +99,7 @@ exports.sessionLogin = onRequest({ invoker: 'public', secrets: [] }, async (req,
     const sessionCookie = await admin.auth().createSessionCookie(idToken, { expiresIn });
     res.cookie('__session', sessionCookie, { maxAge: expiresIn, httpOnly: true, secure: true, path: '/' });
     res.status(200).json({ status: 'success' });
-  } catch (error) {
-    res.status(401).send('UNAUTHORIZED REQUEST!');
-  }
+  } catch (error) { res.status(401).send('UNAUTHORIZED REQUEST!'); }
 });
 
 exports.sessionLogout = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
@@ -131,8 +107,6 @@ exports.sessionLogout = onRequest({ invoker: 'public', secrets: [] }, (req, res)
   res.status(200).json({ status: 'success' });
 });
 
-
-// --- 3. BI API Functions ---
 exports.getFirebaseConfig = onRequest({ secrets: [] }, (req, res) => {
   const handler = (req, res) => {
     try {
@@ -146,9 +120,7 @@ exports.getFirebaseConfig = onRequest({ secrets: [] }, (req, res) => {
         measurementId: "G-X60N12YFQW"
       };
       res.status(200).json(firebaseConfig);
-    } catch (error) {
-      res.status(500).send("Error getting config.");
-    }
+    } catch (error) { res.status(500).send("Error getting config."); }
   };
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
@@ -168,19 +140,15 @@ exports.getStats = onRequest({ secrets: [] }, (req, res) => {
       const snapshot = await getDocs(q);
       const aggregatedStats = {
         totalLineEvents: 0, totalGeminiHits: 0,
-        processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0 },
+        processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0, errors: 0 },
         dailyActivity: {}
       };
 
       snapshot.forEach(doc => {
         const data = doc.data();
-        aggregatedStats.dailyActivity[doc.id] = {
-          lineOaEvents: data.lineOaEvents || 0,
-          geminiApiHits: data.geminiApiHits || 0,
-        };
+        aggregatedStats.dailyActivity[doc.id] = { lineOaEvents: data.lineOaEvents || 0, geminiApiHits: data.geminiApiHits || 0, };
         aggregatedStats.totalLineEvents += data.lineOaEvents || 0;
         aggregatedStats.totalGeminiHits += data.geminiApiHits || 0;
-
         for (const key in aggregatedStats.processing) {
           if (data[key]) aggregatedStats.processing[key] += data[key];
         }
@@ -193,11 +161,74 @@ exports.getStats = onRequest({ secrets: [] }, (req, res) => {
   };
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
+// [FIX] Added the missing functions back
+// [FIX] Added full implementation for API endpoints
+exports.blockUser = onRequest({ secrets: [] }, (req, res) => {
+  const handler = async (req, res) => {
+    try {
+      const { userId, isBlocked } = req.body;
+      if (!userId) {
+        return res.status(400).json({ error: 'userId is required.' });
+      }
+      const statusRef = db.collection('users').doc(userId).collection('status').doc('block');
+      await statusRef.set({ isBlocked: isBlocked, timestamp: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      res.status(200).json({ success: true, message: `User ${userId} status set to blocked: ${isBlocked}` });
+    } catch (error) {
+      console.error("Error blocking user:", error);
+      res.status(500).json({ error: 'Failed to block user.' });
+    }
+  };
+  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+});
+
+exports.sendBroadcast = onRequest({ secrets: [lineChannelAccessToken] }, (req, res) => {
+  const handler = async (req, res) => {
+    const { message } = req.body;
+    if (!message || message.trim() === '') {
+      return res.status(400).json({ error: 'Message cannot be empty.' });
+    }
+    const client = new Client({ channelAccessToken: lineChannelAccessToken.value() });
+    try {
+      const usersSnapshot = await db.collection('users').get();
+      const userIds = usersSnapshot.docs.map(doc => doc.id);
+      if (userIds.length === 0) {
+        return res.status(404).json({ error: 'No users found.' });
+      }
+      const chunkSize = 150;
+      const broadcastPromises = [];
+      for (let i = 0; i < userIds.length; i += chunkSize) {
+        broadcastPromises.push(client.multicast(userIds.slice(i, i + chunkSize), [{ type: 'text', text: message }]));
+      }
+      await Promise.all(broadcastPromises);
+      res.status(200).json({ success: true, message: `Broadcast sent to ${userIds.length} users.` });
+    } catch (error) {
+      console.error("Error sending broadcast:", error);
+      res.status(500).json({ error: 'Failed to send broadcast.' });
+    }
+  };
+  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+});
+
+exports.getErrors = onRequest({ secrets: [] }, (req, res) => {
+  const handler = async (req, res) => {
+    try {
+      const errorsQuery = query(collection(db, 'errors'), orderBy('timestamp', 'desc'), limit(20));
+      const snapshot = await getDocs(errorsQuery);
+      const errors = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, timestamp: doc.data().timestamp.toDate().toISOString() }));
+      res.status(200).json(errors);
+    } catch (error) {
+      console.error("Error fetching errors:", error);
+      res.status(500).json({ error: 'Failed to get errors.' });
+    }
+  };
+  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+});
 
 exports.health = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
+// ... All other helper functions like handleMessage, sendSafeResponse etc. ...
 async function handleMessage(event, client, langAI, loadingManager) {
   const { type: messageType, id: messageId } = event.message;
   const userId = event.source.userId;
@@ -236,20 +267,18 @@ async function handlePostback(event, client, langAI, loadingManager) {
 
 async function sendSafeResponse(event, client, response) {
   try {
+    if (event.replyToken && usedReplyTokens.has(event.replyToken)) {
+      await client.pushMessage(event.source.userId, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
+      return;
+    }
     if (event.replyToken) {
-      if (usedReplyTokens.has(event.replyToken)) {
-        const messages = Array.isArray(response) ? response : [response];
-        await client.pushMessage(event.source.userId, messages.map(validateAndCleanResponse));
-        return;
-      }
       usedReplyTokens.add(event.replyToken);
       setTimeout(() => usedReplyTokens.delete(event.replyToken), 2 * 60 * 1000);
     }
     await client.replyMessage(event.replyToken, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
   } catch (error) {
     if (error.response?.data?.message.includes('Invalid reply token')) {
-      const messages = Array.isArray(response) ? response : [response];
-      await client.pushMessage(event.source.userId, messages.map(validateAndCleanResponse));
+      await client.pushMessage(event.source.userId, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
     }
   }
 }
@@ -262,7 +291,7 @@ function validateAndCleanResponse(response) {
 }
 
 async function handleErrorWithFallback(event, client, userId, originalError) {
-  console.error('Original error:', originalError.message);
+  console.error('Original error:', originalError.message, originalError.stack);
   try {
     await sendSafeResponse(event, client, { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด' });
   } catch (fallbackError) {

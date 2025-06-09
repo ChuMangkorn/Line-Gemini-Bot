@@ -75,7 +75,34 @@ class LangAI {
       console.error(`Error logging usage for ${statType}:`, error);
     }
   }
-
+  async logError(error, context = {}) {
+    try {
+      const errorLog = {
+        message: error.message,
+        stack: error.stack,
+        context: context,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      };
+      await this.db.collection('errors').add(errorLog);
+      await this.logUsage('errors'); // นับจำนวน error
+    } catch (e) {
+      console.error("Failed to log error to Firestore:", e);
+    }
+  }
+  async logError(error, context = {}) {
+    try {
+      const errorLog = {
+        message: error.message,
+        stack: error.stack,
+        context: context,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      };
+      await this.db.collection('errors').add(errorLog);
+      await this.logUsage('errors'); // นับจำนวน error
+    } catch (e) {
+      console.error("Failed to log error to Firestore:", e);
+    }
+  }
   async generateAdminReport() {
     const today = moment().tz('Asia/Bangkok').format('YYYY-MM-DD');
     const statDoc = await this.db.collection('daily_stats').doc(today).get();
