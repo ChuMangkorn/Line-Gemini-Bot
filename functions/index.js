@@ -21,6 +21,7 @@ const lineChannelAccessToken = defineSecret('LINE_CHANNEL_ACCESS_TOKEN');
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const openWeatherApiKey = defineSecret('OPENWEATHER_API_KEY');
 const adminUserId = defineSecret('ADMIN_USER_ID');
+const youtubeApiKey = defineSecret('YOUTUBE_API_KEY');
 
 // --- Global Variables ---
 const usedReplyTokens = new Set();
@@ -46,13 +47,13 @@ const authenticate = async (req, res, next) => {
 
 exports.webhook = onRequest({
   concurrency: 80,
-  secrets: [lineChannelSecret, lineChannelAccessToken, geminiApiKey, openWeatherApiKey, adminUserId],
+  secrets: [lineChannelSecret, lineChannelAccessToken, geminiApiKey, openWeatherApiKey, adminUserId, youtubeApiKey],
 }, async (req, res) => {
   const startTime = Date.now();
   try {
     const config = { channelSecret: lineChannelSecret.value(), channelAccessToken: lineChannelAccessToken.value() };
     const client = new Client(config);
-    const langAI = new LangAI(adminUserId.value());
+    const langAI = new LangAI(adminUserId.value(), youtubeApiKey.value()); 
     const loadingManager = new LoadingManager(client);
     const events = req.body.events || [];
 
@@ -315,6 +316,7 @@ async function handleWithPushMessage(event, client, langAI) {
     console.error('💥 Push message error:', error.stack || error);
   }
 }
+
 
 function streamToBuffer(stream) {
   return new Promise((resolve, reject) => {

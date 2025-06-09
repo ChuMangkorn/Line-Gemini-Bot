@@ -4,16 +4,37 @@ const admin = require('firebase-admin');
 const moment = require('moment-timezone');
 const WeatherService = require('./weatherService');
 const MultimodalProcessor = require('./multimodal');
-
+const { YoutubeTranscript } = require('youtube-transcript');
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
+const YouTubeService = require('./youtubeService');
 
 class LangAI {
-  constructor(adminId) {
+  constructor(adminId, youtubeApiKey) {
     console.log('🤖 เล้ง AI initializing...');
+    const tools = [
+      {
+        functionDeclarations: [
+          {
+            name: 'Youtube',
+            description: 'Searches YouTube for videos based on a user\'s query and returns a list of relevant videos.',
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                query: {
+                  type: 'STRING',
+                  description: 'The search term for the YouTube video.'
+                }
+              },
+              required: ['query']
+            }
+          }
+        ]
+      }
+    ];
 
     try {
       this.genAI = new GoogleGenerativeAI(geminiApiKey.value());
-      this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash', tools: tools });
       console.log('✅ Gemini API connected successfully');
     } catch (error) {
       console.error('❌ Gemini API connection failed:', error);
@@ -23,6 +44,7 @@ class LangAI {
     this.db = admin.firestore();
     this.weatherService = new WeatherService();
     this.multimodal = new MultimodalProcessor();
+    this.youtubeService = new YouTubeService(youtubeApiKey);
 
     // =================================================================
     //  ✅ ADMIN CONFIGURATION
@@ -53,6 +75,7 @@ class LangAI {
 - **Current Date & Time:** ${currentDate}, ${currentTime} (JST).
 - **Contextual Memory:** You can recall previous messages and files in the current conversation to provide seamless and intelligent responses.
 - **Multimodal Analysis:** You are an expert at analyzing and answering questions about text, images, audio, video, and documents.
+- **Youtube:** You can search for YouTube videos when a user asks for a clip or video on a certain topic.
 - **Weather Forecasting:** You can provide detailed, accurate weather forecasts using the One Call API 3.0.
 - **General Knowledge:** You can answer a wide range of questions on various topics.`;
     };
@@ -176,9 +199,11 @@ class LangAI {
                 createStatRow('รูปภาพ (Image)', stats.imageProcessing, '🖼️'),
                 createStatRow('เสียง (Audio)', stats.audioProcessing, '🎵'),
                 createStatRow('วิดีโอ (Video)', stats.videoProcessing, '🎬'),
+                createStatRow('ยูทูป (YouTube)', stats.youtubeProcessing, '▶️'), // <--- เพิ่มบรรทัดนี้
                 createStatRow('ไฟล์ (File)', stats.fileProcessing, '📄'),
                 createStatRow('ตำแหน่ง (Location)', stats.locationProcessing, '📍'),
               ]
+
             },
             {
               type: 'box', layout: 'vertical', cornerRadius: 'md',
@@ -269,7 +294,22 @@ class LangAI {
     if (userId === this.adminId && message.trim().toLowerCase() === '/report') {
       return this.generateAdminReport();
     }
-
+    // --- Professional URL Handling ---
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const urls = message.match(urlRegex);
+    if (urls && urls[0]) {
+      const url = urls[0];
+      // [แก้ไข] ใช้ Regex ที่ดีกว่าเดิมในการตรวจจับลิงก์ YouTube
+      const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/;
+      if (youtubeRegex.test(url)) {
+        return this.processYouTubeLink(url, userId);
+      } else {
+        // สำหรับ URL อื่นๆ ที่ไม่ใช่ YouTube
+        const responseText = `✅ เล้งเห็นลิงก์ที่คุณส่งมาแล้วครับ: ${url}\n\nตอนนี้เล้งยังไม่สามารถเข้าถึงเนื้อหาจากเว็บไซต์ทั่วไปได้โดยตรง แต่สำหรับลิงก์ YouTube เล้งสามารถสรุปให้ได้นะครับ!`;
+        await this.saveConversationContext(userId, `[User sent a link: ${url}]`, responseText);
+        return { type: 'text', text: responseText };
+      }
+    }
     await this.logUsage('textProcessing');
     const contextState = await this.getContextState(userId);
     const lowerMessage = message.toLowerCase();
@@ -323,18 +363,127 @@ class LangAI {
   async processGeneralQuery(message, userId) {
     try {
       const context = await this.getConversationContext(userId);
-      let prompt = this.getSystemPrompt() + `\n\n## Conversation Context\n${context || 'No previous conversation.'}\n\n## User's Query\n${message}`;
+      const prompt = `${this.getSystemPrompt()}\n\n## Conversation Context\n${context || 'No previous conversation.'}\n\n## User's Query\n${message}`;
+
       await this.logUsage('geminiApiHits');
       const result = await this.model.generateContent(prompt);
-      const response = result.response.text();
-      await this.saveConversationContext(userId, message, response);
-      return { type: 'text', text: response };
+      const response = result.response;
+
+      // ตรวจสอบว่า Gemini ต้องการเรียกใช้ Function หรือไม่
+      const functionCalls = response.functionCalls();
+
+      if (functionCalls && functionCalls.length > 0) {
+        console.log(`🤖 Gemini wants to call a tool: ${functionCalls[0].name}`);
+
+        // ตอนนี้เรามีแค่ Youtube
+        if (functionCalls[0].name === 'Youtube') {
+          const { query } = functionCalls[0].args;
+          const searchResults = await this.youtubeService.search(query);
+
+          // ส่งผลลัพธ์กลับไปให้ Gemini เพื่อสร้างคำตอบให้ผู้ใช้
+          const result2 = await this.model.generateContent({
+            contents: [
+              { role: 'user', parts: [{ text: prompt }] },
+              { role: 'model', parts: [{ functionCall: functionCalls[0] }] },
+              {
+                role: 'function',
+                parts: [{
+                  functionResponse: {
+                    name: 'Youtube',
+                    response: {
+                      results: searchResults
+                    }
+                  }
+                }]
+              }
+            ]
+          });
+
+          const finalText = result2.response.text();
+          await this.saveConversationContext(userId, message, finalText);
+
+          // ถ้ามีผลลัพธ์ ให้สร้าง Flex Message สวยๆ
+          if (searchResults && searchResults.length > 0) {
+            return this.createYouTubeCarousel(finalText, searchResults);
+          }
+
+          return { type: 'text', text: finalText };
+        }
+      }
+
+      // กรณีที่ไม่เรียกใช้ Function (ตอบปกติ)
+      const textResponse = response.text();
+      await this.saveConversationContext(userId, message, textResponse);
+      return { type: 'text', text: textResponse };
+
     } catch (error) {
       console.error('General query processing error:', error);
-      return { type: 'text', text: '❌ ขออภัยค่ะ ไม่สามารถประมวลผลข้อความได้' };
+      await this.logError(error, { userId, message, location: 'processGeneralQuery' });
+      return { type: 'text', text: '❌ ขออภัยค่ะ เล้งไม่สามารถประมวลผลข้อความได้' };
     }
   }
+  createYouTubeCarousel(introText, videos) {
+    const bubbles = videos.slice(0, 5).map(video => ({
+      type: 'bubble',
+      size: 'kilo',
+      hero: {
+        type: 'image',
+        url: video.thumbnail,
+        size: 'full',
+        aspectRatio: '16:9',
+        aspectMode: 'cover',
+        action: { type: 'uri', label: 'Play', uri: video.url }
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'text',
+            text: video.title,
+            weight: 'bold',
+            size: 'sm',
+            wrap: true,
+            maxLines: 2
+          },
+          {
+            type: 'text',
+            text: video.description,
+            wrap: true,
+            size: 'xs',
+            color: '#8c8c8c',
+            margin: 'md',
+            maxLines: 3
+          }
+        ],
+        spacing: 'sm',
+        paddingAll: '12px'
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [{
+          type: 'button',
+          action: { type: 'uri', label: 'ดูวิดีโอ', uri: video.url },
+          style: 'primary',
+          color: '#FF0000',
+          height: 'sm'
+        }]
+      }
+    }));
 
+    return [
+      { type: 'text', text: introText },
+      {
+        type: 'flex',
+        altText: 'ผลการค้นหาวิดีโอจาก YouTube',
+        contents: {
+          type: 'carousel',
+          contents: bubbles
+        }
+      }
+    ];
+  }
   async processPostback(data, userId) {
     await this.logUsage('lineOaEvents');
     try {
@@ -534,6 +683,69 @@ class LangAI {
       }
     };
   }
+  createYouTubeCarousel(introText, videos) {
+    const bubbles = videos.slice(0, 5).map(video => ({
+      type: 'bubble',
+      size: 'kilo',
+      hero: {
+        type: 'image',
+        url: video.thumbnail,
+        size: 'full',
+        aspectRatio: '16:9',
+        aspectMode: 'cover',
+        action: { type: 'uri', label: 'Play', uri: video.url }
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'text',
+            text: video.title,
+            weight: 'bold',
+            size: 'sm',
+            wrap: true,
+            maxLines: 2
+          },
+          // [ปรับปรุง] เพิ่มการแสดงชื่อช่อง
+          {
+            type: 'box',
+            layout: 'baseline',
+            margin: 'md',
+            contents: [
+              { type: 'icon', url: 'https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/youtube_icon.png?alt=media&token=c29e6188-f5da-48b4-9c59-d8e78e475e7d', size: 'xs' },
+              { type: 'text', text: video.channelTitle, size: 'xs', color: '#8c8c8c', margin: 'sm', maxLines: 1 }
+            ]
+          }
+        ],
+        spacing: 'sm',
+        paddingAll: '12px'
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [{
+          type: 'button',
+          action: { type: 'uri', label: 'ดูวิดีโอ', uri: video.url },
+          style: 'primary',
+          color: '#FF0000',
+          height: 'sm'
+        }]
+      }
+    }));
+
+    return [
+      { type: 'text', text: introText },
+      {
+        type: 'flex',
+        altText: 'ผลการค้นหาวิดีโอจาก YouTube',
+        contents: {
+          type: 'carousel',
+          contents: bubbles
+        }
+      }
+    ];
+  }
 
   async saveConversationContext(userId, userMessage, aiResponse) {
     try {
@@ -615,6 +827,143 @@ class LangAI {
       return null;
     }
   }
+  async processYouTubeLink(url, userId) {
+    try {
+      console.log(`Processing YouTube link: ${url}`);
+      await this.logUsage('youtubeProcessing'); //  <--- เพิ่ม log การใช้งานใหม่
+      await this.logUsage('geminiApiHits');
+
+      // ดึงบทบรรยาย (transcript) จากวิดีโอ
+      const transcript = await YoutubeTranscript.fetchTranscript(url, { lang: 'en' });
+      const transcriptText = transcript.map(t => t.text).join(' ');
+
+      if (!transcriptText) {
+        return { type: 'text', text: '✅ เล้งเห็นลิงก์ YouTube แล้ว แต่ไม่พบบทบรรยายในวิดีโอนี้ครับ เลยสรุปให้ไม่ได้' };
+      }
+
+      const prompt = `${this.getSystemPrompt()}
+
+      ## Task: Summarize YouTube Video
+      - You are given a transcript from a YouTube video.
+      - Your task is to summarize the key points of the video in clear, easy-to-read bullet points.
+      - Respond in the user's language (assume Thai unless context suggests otherwise).
+      - Start with a confirmation like "✅ เล้งสรุปวิดีโอมาให้แล้วครับ:"
+      - Keep it concise and informative.
+
+      ## Video Transcript
+      ${transcriptText.substring(0, 15000)}
+
+      ## User's Request
+      Summarize this video.`;
+
+      const result = await this.model.generateContent(prompt);
+      const summary = result.response.text();
+
+      // สร้าง Flex Message ที่สวยงามพร้อมปุ่มให้ผู้ใช้เปิดดูวิดีโอได้
+      const flexMessage = {
+        type: 'flex',
+        altText: 'สรุปเนื้อหาวิดีโอจาก YouTube',
+        contents: {
+          type: 'bubble',
+          hero: {
+            type: 'image',
+            url: 'https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/youtube_summary_banner.png?alt=media&token=c2306fc6-d188-4e89-9a7c-6196b29f79bd', // <--- Banner สวยๆ
+            size: 'full',
+            aspectRatio: '20:13',
+            aspectMode: 'cover',
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'md',
+            contents: [
+              {
+                type: 'text',
+                text: 'สรุปวิดีโอ YouTube',
+                weight: 'bold',
+                size: 'xl'
+              },
+              {
+                type: 'box',
+                layout: 'vertical',
+                margin: 'lg',
+                spacing: 'sm',
+                contents: [
+                  {
+                    type: 'box',
+                    layout: 'baseline',
+                    spacing: 'sm',
+                    contents: [
+                      {
+                        type: 'text',
+                        text: summary,
+                        wrap: true,
+                        color: '#666666',
+                        size: 'sm',
+                        flex: 5
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            contents: [
+              {
+                type: 'button',
+                style: 'link',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'เปิดวิดีโอ',
+                  uri: url
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      await this.saveConversationContext(userId, `[User sent YouTube link: ${url}]`, summary);
+      return flexMessage;
+
+    } catch (error) {
+      console.error('YouTube processing error:', error);
+      await this.logError(error, { userId, url, location: 'processYouTubeLink' });
+      // แจ้งผู้ใช้ว่าไม่สามารถประมวลผลได้ แต่ยังคงส่งลิงก์ให้เปิดดูเองได้
+      const errorMessage = {
+        type: 'flex',
+        altText: 'ไม่สามารถประมวลผลวิดีโอได้',
+        contents: {
+          type: 'bubble',
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              { type: 'text', text: 'เกิดข้อผิดพลาด', weight: 'bold', size: 'lg', color: '#FF0000' },
+              { type: 'text', text: 'ขออภัยครับ เล้งไม่สามารถสรุปเนื้อหาจากวิดีโอนี้ได้ อาจเป็นเพราะวิดีโอไม่มีบทบรรยายหรือเป็นวิดีโอส่วนตัวครับ', wrap: true, margin: 'md' }
+            ]
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [{
+              type: 'button',
+              action: { type: 'uri', label: 'ลองเปิดวิดีโอด้วยตัวเอง', uri: url },
+              style: 'primary',
+              height: 'sm'
+            }]
+          }
+        }
+      };
+      return errorMessage;
+    }
+  }
 }
+
 
 module.exports = LangAI;
