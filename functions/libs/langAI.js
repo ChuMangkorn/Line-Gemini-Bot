@@ -41,6 +41,7 @@ class LangAI {
       this.model = null;
     }
 
+
     this.db = admin.firestore();
     this.weatherService = new WeatherService();
     this.multimodal = new MultimodalProcessor();
@@ -291,135 +292,156 @@ class LangAI {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
 
+    // Admin report command
     if (userId === this.adminId && message.trim().toLowerCase() === '/report') {
       return this.generateAdminReport();
     }
-    // --- Professional URL Handling ---
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
+
+    // URL Handling (YouTube links)
+    const urlRegex = /(https?:\/\/(?:www\.)?youtube\.com\/watch\?v=[\w-]+|https?:\/\/youtu\.be\/[\w-]+)/g;
     const urls = message.match(urlRegex);
     if (urls && urls[0]) {
-      const url = urls[0];
-      // [แก้ไข] ใช้ Regex ที่ดีกว่าเดิมในการตรวจจับลิงก์ YouTube
-      const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/;
-      if (youtubeRegex.test(url)) {
-        return this.processYouTubeLink(url, userId);
-      } else {
-        // สำหรับ URL อื่นๆ ที่ไม่ใช่ YouTube
-        const responseText = `✅ เล้งเห็นลิงก์ที่คุณส่งมาแล้วครับ: ${url}\n\nตอนนี้เล้งยังไม่สามารถเข้าถึงเนื้อหาจากเว็บไซต์ทั่วไปได้โดยตรง แต่สำหรับลิงก์ YouTube เล้งสามารถสรุปให้ได้นะครับ!`;
-        await this.saveConversationContext(userId, `[User sent a link: ${url}]`, responseText);
-        return { type: 'text', text: responseText };
-      }
+      return this.processYouTubeLink(urls[0], userId);
     }
-    await this.logUsage('textProcessing');
-    const contextState = await this.getContextState(userId);
-    const lowerMessage = message.toLowerCase();
 
+    await this.logUsage('textProcessing');
+
+    // [REFACTOR] Simplified logic flow
     try {
+      // Handle pending actions first
+      const contextState = await this.getContextState(userId);
       if (contextState.pendingAction === 'request_city_for_weather') {
+        await this.clearContextState(userId); // Clear state before processing
         const cityData = this.weatherService.extractCityFromQuery(message);
         if (cityData) {
-          await this.setContextState(userId, { pendingAction: null, lastMentionedCity: cityData.name });
           return this.weatherService.getCurrentWeather(message);
         }
-        await this.clearContextState(userId);
       }
 
-      if (this.isContextualWeatherQuery(lowerMessage) && contextState.lastMentionedCity) {
-        const fullQuery = `${message} ${contextState.lastMentionedCity}`;
-        if (lowerMessage.includes('รายสัปดาห์') || lowerMessage.includes('weekly')) return this.weatherService.getWeeklyForecast(fullQuery);
-        if (lowerMessage.includes('รายชั่วโมง') || lowerMessage.includes('hourly')) return this.weatherService.getHourlyForecast(fullQuery);
-        const tomorrow = moment().add(1, 'day').format('YYYY-MM-DD');
-        return this.weatherService.getDailyDetailForecast(`daily_detail_${tomorrow}_${contextState.lastMentionedCity}`);
+      // Check for weather queries
+      const weatherResponse = await this.handleWeatherQuery(message, userId);
+      if (weatherResponse) {
+        return weatherResponse;
       }
 
-      const queryType = this.detectQueryType(message);
-      let city;
-      switch (queryType) {
-        case 'current_weather_no_city':
-          await this.setContextState(userId, { pendingAction: 'request_city_for_weather' });
-          return { type: 'text', text: 'คุณต้องการทราบสภาพอากาศของเมืองอะไรครับ? (Which city would you like to know the weather for? / どの都市の天気が知りたいですか？)' };
-        case 'current_weather':
-        case 'weekly_weather':
-        case 'hourly_weather':
-          city = this.weatherService.extractCityFromQuery(message);
-          await this.setContextState(userId, { lastMentionedCity: city.name });
-          const weatherMethod = {
-            'current_weather': this.weatherService.getCurrentWeather,
-            'weekly_weather': this.weatherService.getWeeklyForecast,
-            'hourly_weather': this.weatherService.getHourlyForecast
-          }[queryType].bind(this.weatherService);
-          return weatherMethod(message);
-        case 'time_query':
-          return this.createProfessionalTimeMessage();
-        default:
-          return this.processGeneralQuery(message, userId);
+      // Handle time queries
+      if (this.isTimeQuery(message)) {
+        return this.createProfessionalTimeMessage();
       }
+
+      // Fallback to general query
+      return this.processGeneralQuery(message, userId);
+
     } catch (error) {
       console.error('Text processing error:', error.stack || error);
+      await this.logError(error, { userId, message, location: 'processTextMessage' });
       return { type: 'text', text: '❌ ขออภัยค่ะ เล้งไม่สามารถประมวลผลข้อความได้ในขณะนี้' };
     }
   }
 
+  async handleWeatherQuery(message, userId) {
+    const lowerMessage = message.toLowerCase();
+    const contextState = await this.getContextState(userId);
+
+    // If a city was mentioned previously and the query is contextual (e.g., "what about tomorrow?")
+    if (this.isContextualWeatherQuery(lowerMessage) && contextState.lastMentionedCity) {
+      const fullQuery = `${message} ${contextState.lastMentionedCity}`;
+      if (lowerMessage.includes('รายสัปดาห์') || lowerMessage.includes('weekly')) return this.weatherService.getWeeklyForecast(fullQuery);
+      if (lowerMessage.includes('รายชั่วโมง') || lowerMessage.includes('hourly')) return this.weatherService.getHourlyForecast(fullQuery);
+      // Default contextual query to tomorrow's forecast
+      const tomorrow = moment().add(1, 'day').format('YYYY-MM-DD');
+      return this.weatherService.getDailyDetailForecast(`daily_detail_${tomorrow}_${contextState.lastMentionedCity}`);
+    }
+
+    const queryType = this.detectQueryType(message);
+    let city;
+    switch (queryType) {
+      case 'current_weather_no_city':
+        await this.setContextState(userId, { pendingAction: 'request_city_for_weather' });
+        return { type: 'text', text: 'คุณต้องการทราบสภาพอากาศของเมืองอะไรครับ? (Which city would you like to know the weather for? / どの都市の天気が知りたいですか？)' };
+      case 'current_weather':
+      case 'weekly_weather':
+      case 'hourly_weather':
+        city = this.weatherService.extractCityFromQuery(message);
+        await this.setContextState(userId, { lastMentionedCity: city.name });
+        if (queryType === 'weekly_weather') return this.weatherService.getWeeklyForecast(message);
+        if (queryType === 'hourly_weather') return this.weatherService.getHourlyForecast(message);
+        return this.weatherService.getCurrentWeather(message);
+      default:
+        return null; // Not a weather query
+    }
+  }
   async processGeneralQuery(message, userId) {
     try {
-      const context = await this.getConversationContext(userId);
-      const prompt = `${this.getSystemPrompt()}\n\n## Conversation Context\n${context || 'No previous conversation.'}\n\n## User's Query\n${message}`;
+      const conversationHistory = await this.getConversationHistory(userId);
+      const model = this.genAI.getGenerativeModel({
+        model: "gemini-2.0-flash",
+        // tools: this.tools, // Assuming you have this.tools defined in constructor
+        systemInstruction: this.getSystemPrompt(),
+      });
+
+      const chat = model.startChat({
+        history: conversationHistory,
+        // toolConfig: { functionCallingConfig: { mode: "AUTO" } }
+      });
 
       await this.logUsage('geminiApiHits');
-      const result = await this.model.generateContent(prompt);
+      const result = await chat.sendMessage(message);
       const response = result.response;
 
-      // ตรวจสอบว่า Gemini ต้องการเรียกใช้ Function หรือไม่
+      // --- Robust Response Handling ---
+      if (!response) {
+        throw new Error("Received no response from Gemini API.");
+      }
+
+      // This is a more robust way to handle both text and function calls.
+      const text = response.text();
+
+      // Even if there's a function call, we might get introductory text.
+      // We will prioritize text response if available.
+      if (text) {
+        await this.saveConversationContext(userId, message, text);
+        return { type: 'text', text: text };
+      }
+
+      // Handle function calls if no direct text response
       const functionCalls = response.functionCalls();
-
       if (functionCalls && functionCalls.length > 0) {
-        console.log(`🤖 Gemini wants to call a tool: ${functionCalls[0].name}`);
+        const call = functionCalls[0];
+        console.log(`🤖 Gemini wants to call a tool: ${call.name}`);
 
-        // ตอนนี้เรามีแค่ Youtube
-        if (functionCalls[0].name === 'Youtube') {
-          const { query } = functionCalls[0].args;
+        if (call.name === 'Youtube') {
+          await this.logUsage('youtubeProcessing');
+          const { query } = call.args;
           const searchResults = await this.youtubeService.search(query);
 
-          // ส่งผลลัพธ์กลับไปให้ Gemini เพื่อสร้างคำตอบให้ผู้ใช้
-          const result2 = await this.model.generateContent({
-            contents: [
-              { role: 'user', parts: [{ text: prompt }] },
-              { role: 'model', parts: [{ functionCall: functionCalls[0] }] },
-              {
-                role: 'function',
-                parts: [{
-                  functionResponse: {
-                    name: 'Youtube',
-                    response: {
-                      results: searchResults
-                    }
-                  }
-                }]
+          // Send tool results back to the model
+          const result2 = await chat.sendMessage({
+            tool_responses: [{
+              function_response: {
+                name: 'Youtube',
+                response: { results: searchResults },
               }
-            ]
+            }]
           });
 
           const finalText = result2.response.text();
           await this.saveConversationContext(userId, message, finalText);
 
-          // ถ้ามีผลลัพธ์ ให้สร้าง Flex Message สวยๆ
           if (searchResults && searchResults.length > 0) {
             return this.createYouTubeCarousel(finalText, searchResults);
           }
-
           return { type: 'text', text: finalText };
         }
       }
 
-      // กรณีที่ไม่เรียกใช้ Function (ตอบปกติ)
-      const textResponse = response.text();
-      await this.saveConversationContext(userId, message, textResponse);
-      return { type: 'text', text: textResponse };
+      // Fallback if no text and no function call was handled
+      throw new Error("Gemini response was empty or unhandled.");
 
     } catch (error) {
       console.error('General query processing error:', error);
       await this.logError(error, { userId, message, location: 'processGeneralQuery' });
-      return { type: 'text', text: '❌ ขออภัยค่ะ เล้งไม่สามารถประมวลผลข้อความได้' };
+      return { type: 'text', text: '❌ ขออภัยครับ เล้งพบปัญหาในการประมวลผล กรุณาลองใหม่อีกครั้ง' };
     }
   }
   createYouTubeCarousel(introText, videos) {
@@ -693,7 +715,7 @@ class LangAI {
         size: 'full',
         aspectRatio: '16:9',
         aspectMode: 'cover',
-        action: { type: 'uri', label: 'Play', uri: video.url }
+        action: { type: 'uri', label: 'Play Video', uri: video.url }
       },
       body: {
         type: 'box',
@@ -707,14 +729,24 @@ class LangAI {
             wrap: true,
             maxLines: 2
           },
-          // [ปรับปรุง] เพิ่มการแสดงชื่อช่อง
           {
             type: 'box',
             layout: 'baseline',
             margin: 'md',
             contents: [
-              { type: 'icon', url: 'https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/youtube_icon.png?alt=media&token=c29e6188-f5da-48b4-9c59-d8e78e475e7d', size: 'xs' },
-              { type: 'text', text: video.channelTitle, size: 'xs', color: '#8c8c8c', margin: 'sm', maxLines: 1 }
+              {
+                type: 'icon',
+                url: 'https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/youtube_icon.png?alt=media&token=c29e6188-f5da-48b4-9c59-d8e78e475e7d', // A generic YouTube icon
+                size: 'xs'
+              },
+              {
+                type: 'text',
+                text: video.channelTitle, // Display the channel title
+                size: 'xs',
+                color: '#8c8c8c',
+                margin: 'sm',
+                maxLines: 1
+              }
             ]
           }
         ],
@@ -724,9 +756,10 @@ class LangAI {
       footer: {
         type: 'box',
         layout: 'vertical',
+        spacing: 'sm',
         contents: [{
           type: 'button',
-          action: { type: 'uri', label: 'ดูวิดีโอ', uri: video.url },
+          action: { type: 'uri', label: 'Watch Video', uri: video.url },
           style: 'primary',
           color: '#FF0000',
           height: 'sm'
@@ -738,7 +771,7 @@ class LangAI {
       { type: 'text', text: introText },
       {
         type: 'flex',
-        altText: 'ผลการค้นหาวิดีโอจาก YouTube',
+        altText: 'Video search results from YouTube',
         contents: {
           type: 'carousel',
           contents: bubbles
@@ -746,6 +779,7 @@ class LangAI {
       }
     ];
   }
+
 
   async saveConversationContext(userId, userMessage, aiResponse) {
     try {
@@ -778,7 +812,26 @@ class LangAI {
       console.error('Error saving conversation context:', error);
     }
   }
-
+  async getConversationHistory(userId) {
+    const conversationRef = this.db.collection('conversations').doc(userId);
+    const doc = await conversationRef.get();
+    if (!doc.exists || !doc.data().messages) {
+      return [];
+    }
+    const messages = doc.data().messages.slice(-10); // Get last 10 exchanges
+    const history = [];
+    messages.forEach(conv => {
+      history.push({
+        role: "user",
+        parts: [{ text: conv.userMessage }],
+      });
+      history.push({
+        role: "model",
+        parts: [{ text: conv.aiResponse }],
+      });
+    });
+    return history;
+  }
   async getConversationContext(userId) {
     try {
       const conversationRef = this.db.collection('conversations').doc(userId);

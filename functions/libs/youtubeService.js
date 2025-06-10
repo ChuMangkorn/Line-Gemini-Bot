@@ -16,34 +16,41 @@ class YouTubeService {
    */
   async search(query) {
     if (!this.apiKey) {
+      console.error('❌ YouTube API key is missing.');
       throw new Error('YouTube API key not configured.');
     }
-
     const params = {
       part: 'snippet',
       q: query,
       key: this.apiKey,
       type: 'video',
-      maxResults: 5, // ค้นหามา 5 รายการ เผื่อเลือก
-      order: 'relevance' // เรียงตามความเกี่ยวข้อง
+      maxResults: 5,
+      order: 'relevance'
     };
 
     try {
-      console.log(`Searching YouTube for: "${query}"`);
+      console.log(`🔎 Searching YouTube for: "${query}"`);
       const response = await axios.get(this.baseUrl, { params });
+
+      if (!response.data.items || response.data.items.length === 0) {
+        console.log(`🤔 No YouTube results found for: "${query}"`);
+        return [];
+      }
 
       const results = response.data.items.map(item => ({
         videoId: item.id.videoId,
         title: item.snippet.title,
-        description: item.snippet.description,
+        description: item.snippet.description.substring(0, 100) + '...',
         thumbnail: item.snippet.thumbnails.high.url,
-        url: `https://www.youtube.com/watch?v=${item.id.videoId}`
+        channelTitle: item.snippet.channelTitle,
+        url: `youtube.com{item.id.videoId}`
       }));
 
       console.log(`✅ Found ${results.length} videos from YouTube.`);
       return results;
     } catch (error) {
-      console.error('💥 Error fetching from YouTube API:', error.response ? error.response.data : error.message);
+      const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+      console.error(`💥 Error fetching from YouTube API: ${errorMessage}`);
       throw new Error('Could not retrieve video data from YouTube.');
     }
   }
@@ -79,8 +86,10 @@ class YouTubeService {
       console.log(`✅ Found ${results.length} videos from YouTube.`);
       return results;
     } catch (error) {
-      console.error('💥 Error fetching from YouTube API:', error.response ? error.response.data : error.message);
-      throw new Error('Could not retrieve video data from YouTube.');
+      const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+      console.error(`💥 Error fetching from YouTube API: ${errorMessage}`);
+      // Return empty array on error to prevent crashing the main flow
+      return [];
     }
   }
 }
