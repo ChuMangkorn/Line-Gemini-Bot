@@ -1,14 +1,13 @@
-// [FINAL & STABLE VERSION] functions/libs/langAI.js
-
+const admin = require('firebase-admin');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { defineSecret } = require('firebase-functions/params');
-const admin = require('firebase-admin');
 const moment = require('moment-timezone');
 const WeatherService = require('./weatherService');
 const MultimodalProcessor = require('./multimodal');
 const { YoutubeTranscript } = require('youtube-transcript');
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const YouTubeService = require('./youtubeService');
+
 
 class LangAI {
   constructor(adminId, youtubeApiKey) {
@@ -182,31 +181,42 @@ class LangAI {
   }
 
   async updateUserProfile(userId, client) {
-    const userRef = this.db.collection('users').doc(userId).collection('profile').doc('info');
-    const doc = await userRef.get();
+    const userDocRef = this.db.collection('users').doc(userId);
+    const profileRef = userDocRef.collection('profile').doc('info');
 
-    if (!doc.exists || moment().diff(moment(doc.data().lastFetched?.toDate()), 'hours') > 24) {
-      try {
-        const profile = await client.getProfile(userId);
-        await userRef.set({
-          displayName: profile.displayName,
-          pictureUrl: profile.pictureUrl,
-          statusMessage: profile.statusMessage,
-          lastFetched: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        console.log(`Updated profile for user: ${profile.displayName}`);
-      } catch (error) {
-        console.error(`Failed to get profile for user ${userId}:`, error.message);
-        if (!doc.exists) {
-          await userRef.set({
-            displayName: `User (${userId.slice(-6)})`,
-            pictureUrl: '',
-            lastFetched: admin.firestore.FieldValue.serverTimestamp()
-          });
-        }
-      }
+    try {
+      // พยายามดึงข้อมูลโปรไฟล์จาก LINE
+      const profile = await client.getProfile(userId);
+      console.log(`Successfully fetched profile for user: ${profile.displayName}`);
+
+      // บันทึกข้อมูลโปรไฟล์ที่ได้มาลงทั้งเอกสารหลักและ subcollection
+      const profileData = {
+        displayName: profile.displayName,
+        pictureUrl: profile.pictureUrl,
+        lastSeen: admin.firestore.FieldValue.serverTimestamp()
+      };
+
+      await userDocRef.set(profileData, { merge: true });
+      await profileRef.set({
+        ...profileData,
+        statusMessage: profile.statusMessage,
+        lastFetched: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+
+    } catch (error) {
+      // กรณีดึงโปรไฟล์จาก LINE ไม่สำเร็จ
+      console.error(`Failed to get profile for user ${userId}, creating fallback. Error: ${error.message}`);
+
+      // ให้สร้าง/อัปเดตข้อมูลพื้นฐานในเอกสารหลัก เพื่อให้ Broadcast หากเจอ
+      const fallbackData = {
+        displayName: `User (${userId.slice(-6)})`,
+        pictureUrl: '',
+        lastSeen: admin.firestore.FieldValue.serverTimestamp()
+      };
+      await userDocRef.set(fallbackData, { merge: true });
     }
   }
+
 
   async setContextState(userId, stateData) {
     try {

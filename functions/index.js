@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const cookieParser = require('cookie-parser');
 const { collection, query, where, getDocs, documentId, orderBy, limit } = require('firebase-admin/firestore');
+const { FieldPath } = require('firebase-admin/firestore');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -53,7 +54,7 @@ exports.webhook = onRequest({
   try {
     const config = { channelSecret: lineChannelSecret.value(), channelAccessToken: lineChannelAccessToken.value() };
     const client = new Client(config);
-    const langAI = new LangAI(adminUserId.value(), youtubeApiKey.value()); 
+    const langAI = new LangAI(adminUserId.value(), youtubeApiKey.value());
     const loadingManager = new LoadingManager(client);
     const events = req.body.events || [];
 
@@ -132,13 +133,12 @@ exports.getStats = onRequest({ secrets: [] }, (req, res) => {
       const { startDate, endDate } = req.query;
       if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required.' });
 
-      const q = query(
-        collection(db, 'daily_stats'),
-        where(documentId(), '>=', startDate),
-        where(documentId(), '<=', endDate)
-      );
+      // [FIX] เปลี่ยนมาใช้ Chained method query
+      const q = db.collection('daily_stats')
+        .where(FieldPath.documentId(), '>=', startDate)
+        .where(FieldPath.documentId(), '<=', endDate);
 
-      const snapshot = await getDocs(q);
+      const snapshot = await q.get();
       const aggregatedStats = {
         totalLineEvents: 0, totalGeminiHits: 0,
         processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0, errors: 0 },
@@ -162,8 +162,6 @@ exports.getStats = onRequest({ secrets: [] }, (req, res) => {
   };
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
-// [FIX] Added the missing functions back
-// [FIX] Added full implementation for API endpoints
 exports.blockUser = onRequest({ secrets: [] }, (req, res) => {
   const handler = async (req, res) => {
     try {
@@ -213,8 +211,8 @@ exports.sendBroadcast = onRequest({ secrets: [lineChannelAccessToken] }, (req, r
 exports.getErrors = onRequest({ secrets: [] }, (req, res) => {
   const handler = async (req, res) => {
     try {
-      const errorsQuery = query(collection(db, 'errors'), orderBy('timestamp', 'desc'), limit(20));
-      const snapshot = await getDocs(errorsQuery);
+      const errorsQuery = db.collection('errors').orderBy('timestamp', 'desc').limit(20);
+      const snapshot = await errorsQuery.get();
       const errors = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, timestamp: doc.data().timestamp.toDate().toISOString() }));
       res.status(200).json(errors);
     } catch (error) {
