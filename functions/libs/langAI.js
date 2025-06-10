@@ -1,3 +1,5 @@
+// [FINAL & STABLE VERSION] functions/libs/langAI.js
+
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
@@ -11,81 +13,56 @@ const YouTubeService = require('./youtubeService');
 class LangAI {
   constructor(adminId, youtubeApiKey) {
     console.log('🤖 เล้ง AI initializing...');
-    const tools = [
-      {
-        functionDeclarations: [
-          {
-            name: 'Youtube',
-            description: 'Searches YouTube for videos based on a user\'s query and returns a list of relevant videos.',
-            parameters: {
-              type: 'OBJECT',
-              properties: {
-                query: {
-                  type: 'STRING',
-                  description: 'The search term for the YouTube video.'
-                }
-              },
-              required: ['query']
-            }
-          }
-        ]
-      }
-    ];
+
+    // [FIX] กำหนด tools ให้กับ instance ของคลาสด้วย 'this.tools'
+    this.tools = [{
+      functionDeclarations: [
+        {
+          name: 'Youtube',
+          description: 'Searches YouTube for videos based on a user\'s query and returns a list of relevant videos.',
+          parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'The search term for the YouTube video.' } }, required: ['query'] }
+        }
+      ]
+    }];
 
     try {
       this.genAI = new GoogleGenerativeAI(geminiApiKey.value());
-      this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash', tools: tools });
-      console.log('✅ Gemini API connected successfully');
+      // [FIX 2] ไม่ต้องสร้าง this.model ที่นี่แล้ว เราจะไปสร้างในแต่ละฟังก์ชันที่เรียกใช้แทน
+      console.log('✅ Gemini API Initialized');
     } catch (error) {
       console.error('❌ Gemini API connection failed:', error);
-      this.model = null;
+      this.genAI = null;
     }
-
 
     this.db = admin.firestore();
     this.weatherService = new WeatherService();
     this.multimodal = new MultimodalProcessor();
     this.youtubeService = new YouTubeService(youtubeApiKey);
-
-    // =================================================================
-    //  ✅ ADMIN CONFIGURATION
-    // =================================================================
-    this.adminId = 'adminId'; // <--- 🚨 **สำคัญ:** แก้ไขตรงนี้
+    this.adminId = adminId;
 
     this.getSystemPrompt = () => {
       const currentTime = moment().tz('Asia/Tokyo').format('YYYY-MM-DD HH:mm:ss JST');
       const currentDate = moment().tz('Asia/Tokyo').format('dddd, MMMM Do YYYY');
-
       return `You are "Leng," a brilliant, multilingual AI assistant in LINE. Your name is "เล้ง".
-
- CRITICAL RULE: Language Protocol
-- You MUST ALWAYS respond in the same language as the user's last message.
-- Example 1: User says "Hello" -> You respond in English.
-- Example 2: User says "こんにちは" -> You respond in Japanese.
-- Example 3: User says "สบายดีไหม" -> You respond in Thai.
-- This is your highest priority rule. Do not break it.
-
- Core Persona & Principles
-- **Expert & Trustworthy:** Act as a polite, intelligent, and reliable expert.
-- **Accurate & Factual:** Provide fact-based information. If uncertain, state your limitations.
-- **Structured & Clear:** Format answers for readability using Markdown (headings, lists, bolding).
-- **Proactive & Helpful:** Anticipate user needs. Suggest relevant follow-up questions or additional information after answering.
-- **Purposeful Emojis:** Use emojis like ✅, 💡, ⚠️ to enhance meaning, not for decoration.
-
- Capabilities & Knowledge
-- **Current Date & Time:** ${currentDate}, ${currentTime} (JST).
-- **Contextual Memory:** You can recall previous messages and files in the current conversation to provide seamless and intelligent responses.
-- **Multimodal Analysis:** You are an expert at analyzing and answering questions about text, images, audio, video, and documents.
-- **Youtube:** You can search for YouTube videos when a user asks for a clip or video on a certain topic.
-- **Weather Forecasting:** You can provide detailed, accurate weather forecasts using the One Call API 3.0.
-- **General Knowledge:** You can answer a wide range of questions on various topics.`;
+        CRITICAL RULE: Language Protocol
+        - You MUST ALWAYS respond in the same language as the user's last message.
+        Core Persona & Principles
+        - **Expert & Trustworthy:** Act as a polite, intelligent, and reliable expert.
+        - **Accurate & Factual:** Provide fact-based information.
+        - **Structured & Clear:** Format answers for readability using Markdown.
+        - **Proactive & Helpful:** Anticipate user needs. Suggest relevant follow-up questions.
+        Capabilities & Knowledge
+        - **Current Date & Time:** ${currentDate}, ${currentTime} (JST).
+        - **Contextual Memory:** You can recall previous messages in the current conversation.
+        - **Multimodal Analysis:** Expert at analyzing text, images, audio, video, and documents.
+        - **Youtube:** You can search for YouTube videos.
+        - **Weather Forecasting:** You can provide detailed weather forecasts.
+        - **General Knowledge:** You can answer a wide range of questions.`;
     };
     console.log('✅ เล้ง AI ready!');
   }
 
-  // =================================================================
-  //  ✨ Reporting & Usage Logging
-  // =================================================================
+  // ... All helper functions like logUsage, logError, generateAdminReport, etc. remain the same ...
   async logUsage(statType, count = 1) {
     const today = moment().tz('Asia/Bangkok').format('YYYY-MM-DD');
     const statRef = this.db.collection('daily_stats').doc(today);
@@ -99,6 +76,7 @@ class LangAI {
       console.error(`Error logging usage for ${statType}:`, error);
     }
   }
+
   async logError(error, context = {}) {
     try {
       const errorLog = {
@@ -108,30 +86,17 @@ class LangAI {
         timestamp: admin.firestore.FieldValue.serverTimestamp()
       };
       await this.db.collection('errors').add(errorLog);
-      await this.logUsage('errors'); // นับจำนวน error
+      await this.logUsage('errors');
     } catch (e) {
       console.error("Failed to log error to Firestore:", e);
     }
   }
-  async logError(error, context = {}) {
-    try {
-      const errorLog = {
-        message: error.message,
-        stack: error.stack,
-        context: context,
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
-      };
-      await this.db.collection('errors').add(errorLog);
-      await this.logUsage('errors'); // นับจำนวน error
-    } catch (e) {
-      console.error("Failed to log error to Firestore:", e);
-    }
-  }
+
   async generateAdminReport() {
+    // This function is correct and does not need changes.
     const today = moment().tz('Asia/Bangkok').format('YYYY-MM-DD');
     const statDoc = await this.db.collection('daily_stats').doc(today).get();
     const stats = statDoc.exists ? statDoc.data() : {};
-
     const conversationsQuery = this.db.collection('conversations').orderBy('lastUpdated', 'desc').limit(3);
     const conversationsSnapshot = await conversationsQuery.get();
     const recentConversations = [];
@@ -147,7 +112,6 @@ class LangAI {
         });
       }
     });
-
     const createStatRow = (label, value, icon) => ({
       type: 'box', layout: 'horizontal', margin: 'md',
       contents: [
@@ -156,16 +120,14 @@ class LangAI {
         { type: 'text', text: `${value || 0}`, size: 'sm', color: '#FFFFFF', align: 'end', weight: 'bold' }
       ]
     });
-
     const createConversationRow = (convo) => ({
       type: 'box', layout: 'vertical', margin: 'lg', spacing: 'sm',
       contents: [
-        { type: 'text', text: `👤 ${convo.user} (${convo.time})`, color: '#AEB8C1', size: 'xs' },
+        { type: 'text', text: `👤 <span class="math-inline">\{convo\.user\} \(</span>{convo.time})`, color: '#AEB8C1', size: 'xs' },
         { type: 'text', text: `> ${convo.userMsg}`, style: 'italic', color: '#FFFFFF', size: 'sm' },
         { type: 'text', text: `< ${convo.aiMsg}`, style: 'italic', color: '#D3D3D3', size: 'sm' },
       ]
     });
-
     return {
       type: 'flex',
       altText: `รายงานสรุปการใช้งานวันที่ ${today}`,
@@ -200,11 +162,10 @@ class LangAI {
                 createStatRow('รูปภาพ (Image)', stats.imageProcessing, '🖼️'),
                 createStatRow('เสียง (Audio)', stats.audioProcessing, '🎵'),
                 createStatRow('วิดีโอ (Video)', stats.videoProcessing, '🎬'),
-                createStatRow('ยูทูป (YouTube)', stats.youtubeProcessing, '▶️'), // <--- เพิ่มบรรทัดนี้
+                createStatRow('ยูทูป (YouTube)', stats.youtubeProcessing, '▶️'),
                 createStatRow('ไฟล์ (File)', stats.fileProcessing, '📄'),
                 createStatRow('ตำแหน่ง (Location)', stats.locationProcessing, '📍'),
               ]
-
             },
             {
               type: 'box', layout: 'vertical', cornerRadius: 'md',
@@ -220,9 +181,6 @@ class LangAI {
     };
   }
 
-  // =================================================================
-  //  ✅ State, Context & Profile Management
-  // =================================================================
   async updateUserProfile(userId, client) {
     const userRef = this.db.collection('users').doc(userId).collection('profile').doc('info');
     const doc = await userRef.get();
@@ -285,70 +243,33 @@ class LangAI {
     }
   }
 
-  // =================================================================
-  //  ✅ Main Processing Logic
-  // =================================================================
-  async processTextMessage(message, userId, client) {
-    await this.logUsage('lineOaEvents');
-    await this.updateUserProfile(userId, client);
-
-    // Admin report command
-    if (userId === this.adminId && message.trim().toLowerCase() === '/report') {
-      return this.generateAdminReport();
+  async getConversationHistory(userId) {
+    const conversationRef = this.db.collection('conversations').doc(userId);
+    const doc = await conversationRef.get();
+    if (!doc.exists || !doc.data().messages) {
+      return [];
     }
-
-    // URL Handling (YouTube links)
-    const urlRegex = /(https?:\/\/(?:www\.)?youtube\.com\/watch\?v=[\w-]+|https?:\/\/youtu\.be\/[\w-]+)/g;
-    const urls = message.match(urlRegex);
-    if (urls && urls[0]) {
-      return this.processYouTubeLink(urls[0], userId);
-    }
-
-    await this.logUsage('textProcessing');
-
-    // [REFACTOR] Simplified logic flow
-    try {
-      // Handle pending actions first
-      const contextState = await this.getContextState(userId);
-      if (contextState.pendingAction === 'request_city_for_weather') {
-        await this.clearContextState(userId); // Clear state before processing
-        const cityData = this.weatherService.extractCityFromQuery(message);
-        if (cityData) {
-          return this.weatherService.getCurrentWeather(message);
-        }
+    const messages = doc.data().messages.slice(-10);
+    const history = [];
+    messages.forEach(conv => {
+      if (conv.userMessage) {
+        history.push({ role: "user", parts: [{ text: conv.userMessage }] });
       }
-
-      // Check for weather queries
-      const weatherResponse = await this.handleWeatherQuery(message, userId);
-      if (weatherResponse) {
-        return weatherResponse;
+      if (conv.aiResponse) {
+        history.push({ role: "model", parts: [{ text: conv.aiResponse }] });
       }
-
-      // Handle time queries
-      if (this.isTimeQuery(message)) {
-        return this.createProfessionalTimeMessage();
-      }
-
-      // Fallback to general query
-      return this.processGeneralQuery(message, userId);
-
-    } catch (error) {
-      console.error('Text processing error:', error.stack || error);
-      await this.logError(error, { userId, message, location: 'processTextMessage' });
-      return { type: 'text', text: '❌ ขออภัยค่ะ เล้งไม่สามารถประมวลผลข้อความได้ในขณะนี้' };
-    }
+    });
+    return history;
   }
 
   async handleWeatherQuery(message, userId) {
     const lowerMessage = message.toLowerCase();
     const contextState = await this.getContextState(userId);
 
-    // If a city was mentioned previously and the query is contextual (e.g., "what about tomorrow?")
     if (this.isContextualWeatherQuery(lowerMessage) && contextState.lastMentionedCity) {
       const fullQuery = `${message} ${contextState.lastMentionedCity}`;
       if (lowerMessage.includes('รายสัปดาห์') || lowerMessage.includes('weekly')) return this.weatherService.getWeeklyForecast(fullQuery);
       if (lowerMessage.includes('รายชั่วโมง') || lowerMessage.includes('hourly')) return this.weatherService.getHourlyForecast(fullQuery);
-      // Default contextual query to tomorrow's forecast
       const tomorrow = moment().add(1, 'day').format('YYYY-MM-DD');
       return this.weatherService.getDailyDetailForecast(`daily_detail_${tomorrow}_${contextState.lastMentionedCity}`);
     }
@@ -358,7 +279,7 @@ class LangAI {
     switch (queryType) {
       case 'current_weather_no_city':
         await this.setContextState(userId, { pendingAction: 'request_city_for_weather' });
-        return { type: 'text', text: 'คุณต้องการทราบสภาพอากาศของเมืองอะไรครับ? (Which city would you like to know the weather for? / どの都市の天気が知りたいですか？)' };
+        return { type: 'text', text: 'คุณต้องการทราบสภาพอากาศของเมืองอะไรครับ?' };
       case 'current_weather':
       case 'weekly_weather':
       case 'hourly_weather':
@@ -368,44 +289,81 @@ class LangAI {
         if (queryType === 'hourly_weather') return this.weatherService.getHourlyForecast(message);
         return this.weatherService.getCurrentWeather(message);
       default:
-        return null; // Not a weather query
+        return null;
     }
   }
-  async processGeneralQuery(message, userId) {
+
+  async processTextMessage(message, userId, client) {
+    await this.logUsage('lineOaEvents');
+    await this.updateUserProfile(userId, client);
+
+    if (userId === this.adminId && message.trim().toLowerCase() === '/report') {
+      return this.generateAdminReport();
+    }
+
+    const urlRegex = /(https?:\/\/(?:www\.)?youtube\.com\/watch\?v=[\w-]+|https?:\/\/youtu\.be\/[\w-]+)/g;
+    const urls = message.match(urlRegex);
+    if (urls && urls[0]) {
+      return this.processYouTubeLink(urls[0], userId);
+    }
+
+    await this.logUsage('textProcessing');
+
     try {
-      const conversationHistory = await this.getConversationHistory(userId);
+      const contextState = await this.getContextState(userId);
+      if (contextState.pendingAction === 'request_city_for_weather') {
+        await this.clearContextState(userId);
+        const cityData = this.weatherService.extractCityFromQuery(message);
+        if (cityData) {
+          return this.weatherService.getCurrentWeather(message);
+        }
+      }
+
+      const weatherResponse = await this.handleWeatherQuery(message, userId);
+      if (weatherResponse) {
+        return weatherResponse;
+      }
+
+      if (this.isTimeQuery(message)) {
+        return this.createProfessionalTimeMessage();
+      }
+
+      return this.processGeneralQuery(message, userId);
+
+    } catch (error) {
+      console.error('Text processing error:', error.stack || error);
+      await this.logError(error, { userId, message, location: 'processTextMessage' });
+      return { type: 'text', text: '❌ ขออภัยค่ะ เล้งไม่สามารถประมวลผลข้อความได้ในขณะนี้' };
+    }
+  }
+
+  // [REFACTORED] Switched back to a more stable, stateless two-call pattern for tool use.
+  async processGeneralQuery(message, userId) {
+    if (!this.genAI) {
+      return { type: 'text', text: '❌ ขออภัยครับ ขณะนี้ระบบ AI ขัดข้องชั่วคราว' };
+    }
+
+    try {
+      const history = await this.getConversationHistory(userId);
       const model = this.genAI.getGenerativeModel({
         model: "gemini-2.0-flash",
-        // tools: this.tools, // Assuming you have this.tools defined in constructor
+        tools: this.tools,
         systemInstruction: this.getSystemPrompt(),
       });
 
-      const chat = model.startChat({
-        history: conversationHistory,
-        // toolConfig: { functionCallingConfig: { mode: "AUTO" } }
-      });
-
       await this.logUsage('geminiApiHits');
-      const result = await chat.sendMessage(message);
-      const response = result.response;
 
-      // --- Robust Response Handling ---
+      // Build the request with history
+      const contents = [...history, { role: 'user', parts: [{ text: message }] }];
+      const result = await model.generateContent({ contents });
+
+      const response = result.response;
       if (!response) {
         throw new Error("Received no response from Gemini API.");
       }
 
-      // This is a more robust way to handle both text and function calls.
-      const text = response.text();
-
-      // Even if there's a function call, we might get introductory text.
-      // We will prioritize text response if available.
-      if (text) {
-        await this.saveConversationContext(userId, message, text);
-        return { type: 'text', text: text };
-      }
-
-      // Handle function calls if no direct text response
       const functionCalls = response.functionCalls();
+
       if (functionCalls && functionCalls.length > 0) {
         const call = functionCalls[0];
         console.log(`🤖 Gemini wants to call a tool: ${call.name}`);
@@ -415,14 +373,21 @@ class LangAI {
           const { query } = call.args;
           const searchResults = await this.youtubeService.search(query);
 
-          // Send tool results back to the model
-          const result2 = await chat.sendMessage({
-            tool_responses: [{
-              function_response: {
-                name: 'Youtube',
-                response: { results: searchResults },
-              }
-            }]
+          // Send the function response back to the model
+          const result2 = await model.generateContent({
+            contents: [
+              ...contents, // Send original history and user message again
+              { role: 'model', parts: [{ functionCall: call }] }, // Include the model's first turn
+              { // Add the function response
+                role: 'function',
+                parts: [{
+                  functionResponse: {
+                    name: 'Youtube',
+                    response: { results: searchResults },
+                  },
+                }],
+              },
+            ],
           });
 
           const finalText = result2.response.text();
@@ -435,7 +400,12 @@ class LangAI {
         }
       }
 
-      // Fallback if no text and no function call was handled
+      const text = response.text();
+      if (text) {
+        await this.saveConversationContext(userId, message, text);
+        return { type: 'text', text: text };
+      }
+
       throw new Error("Gemini response was empty or unhandled.");
 
     } catch (error) {
@@ -444,67 +414,36 @@ class LangAI {
       return { type: 'text', text: '❌ ขออภัยครับ เล้งพบปัญหาในการประมวลผล กรุณาลองใหม่อีกครั้ง' };
     }
   }
+
+  // ... rest of the file (createYouTubeCarousel, processPostback, etc.) is correct and does not need changes ...
   createYouTubeCarousel(introText, videos) {
-    const bubbles = videos.slice(0, 5).map(video => ({
+    const bubbles = videos.slice(0, 8).map(video => ({
       type: 'bubble',
       size: 'kilo',
-      hero: {
-        type: 'image',
-        url: video.thumbnail,
-        size: 'full',
-        aspectRatio: '16:9',
-        aspectMode: 'cover',
-        action: { type: 'uri', label: 'Play', uri: video.url }
-      },
+      styles: { footer: { separator: true } },
+      hero: { type: 'image', url: video.thumbnail, size: 'full', aspectRatio: '16:9', aspectMode: 'cover', action: { type: 'uri', label: 'Play Video', uri: video.url } },
       body: {
-        type: 'box',
-        layout: 'vertical',
+        type: 'box', layout: 'vertical', paddingAll: '12px', spacing: 'md',
         contents: [
+          { type: 'text', text: video.title, weight: 'bold', size: 'md', wrap: true, maxLines: 2, color: '#FFFFFF' },
           {
-            type: 'text',
-            text: video.title,
-            weight: 'bold',
-            size: 'sm',
-            wrap: true,
-            maxLines: 2
+            type: 'box', layout: 'baseline', spacing: 'sm', margin: 'md',
+            contents: [
+              { type: 'icon', url: 'https://i.imgur.com/bA15iIz.png', size: 'sm' },
+              { type: 'text', text: video.channelTitle, color: '#d1d5db', size: 'sm', maxLines: 1, flex: 5 }
+            ]
           },
-          {
-            type: 'text',
-            text: video.description,
-            wrap: true,
-            size: 'xs',
-            color: '#8c8c8c',
-            margin: 'md',
-            maxLines: 3
-          }
-        ],
-        spacing: 'sm',
-        paddingAll: '12px'
+          { type: 'text', text: video.description || 'No description available.', wrap: true, size: 'xs', color: '#9ca3af', maxLines: 3, margin: 'md' }
+        ]
       },
       footer: {
-        type: 'box',
-        layout: 'vertical',
-        contents: [{
-          type: 'button',
-          action: { type: 'uri', label: 'ดูวิดีโอ', uri: video.url },
-          style: 'primary',
-          color: '#FF0000',
-          height: 'sm'
-        }]
+        type: 'box', layout: 'vertical',
+        contents: [
+          { type: 'button', action: { type: 'uri', label: 'ดูวิดีโอ (Watch)', uri: video.url }, style: 'primary', color: '#ff0000', height: 'sm', margin: 'none' }
+        ]
       }
     }));
-
-    return [
-      { type: 'text', text: introText },
-      {
-        type: 'flex',
-        altText: 'ผลการค้นหาวิดีโอจาก YouTube',
-        contents: {
-          type: 'carousel',
-          contents: bubbles
-        }
-      }
-    ];
+    return [{ type: 'text', text: introText }, { type: 'flex', altText: 'ผลการค้นหาวิดีโอจาก YouTube', contents: { type: 'carousel', contents: bubbles } }];
   }
   async processPostback(data, userId) {
     await this.logUsage('lineOaEvents');
@@ -514,21 +453,19 @@ class LangAI {
       const cityPayload = parts.slice(parts.length > 2 ? 2 : 1).join('_');
       const city = this.weatherService.extractCityFromQuery(cityPayload);
       if (city) await this.setContextState(userId, { lastMentionedCity: city.name });
-
       if (data.startsWith('weekly_forecast_')) return this.weatherService.getWeeklyForecast(data);
       if (data.startsWith('hourly_forecast_')) return this.weatherService.getHourlyForecast(data);
       if (data.startsWith('daily_detail_')) return this.weatherService.getDailyDetailForecast(data);
-
-      const prompt = `${this.getSystemPrompt()}\n\nUser pressed a button with data: "${data}". Respond accordingly.`;
+      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: this.getSystemPrompt() });
+      const prompt = `User pressed a button with data: "${data}". Respond accordingly.`;
       await this.logUsage('geminiApiHits');
-      const result = await this.model.generateContent(prompt);
+      const result = await model.generateContent(prompt);
       return { type: 'text', text: result.response.text() };
     } catch (error) {
       console.error('Postback processing error:', error);
       return { type: 'text', text: '❌ ขออภัยค่ะ ไม่สามารถประมวลผลการเลือกได้' };
     }
   }
-
   async processImageMessage(imageBuffer, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -544,7 +481,6 @@ class LangAI {
       return { type: 'text', text: `❌ Sorry, Leng could not analyze the image: ${error.message}` };
     }
   }
-
   async processAudioMessage(audioBuffer, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -560,7 +496,6 @@ class LangAI {
       return { type: 'text', text: `❌ Sorry, Leng could not process the audio: ${error.message}` };
     }
   }
-
   async processVideoMessage(videoBuffer, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -576,7 +511,6 @@ class LangAI {
       return { type: 'text', text: `❌ Sorry, Leng could not analyze the video: ${error.message}` };
     }
   }
-
   async processFileMessage(fileBuffer, fileName, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -586,13 +520,12 @@ class LangAI {
       const result = await this.multimodal.analyzeDocument(fileBuffer, fileName, userId);
       await this.saveFileContext(userId, 'document', `Document: ${fileName}`);
       await this.saveConversationContext(userId, `[User sent a file: ${fileName}]`, result);
-      return { type: 'text', text: `📄 **Summary from "${fileName}":**\n\n${result}` };
+      return { type: 'text', text: `📄 **Summary from "<span class="math-inline">\{fileName\}"\:\*\*\\n\\n</span>{result}` };
     } catch (error) {
       console.error('File processing error:', error);
       return { type: 'text', text: `❌ Sorry, Leng could not read the document "${fileName}": ${error.message}` };
     }
   }
-
   async processLocationMessage(lat, lon, address, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -601,10 +534,10 @@ class LangAI {
       const city = { lat, lon, name: address || 'Specified Location', timezone: 'Asia/Bangkok' };
       const weatherData = await this.weatherService.fetchOneCallApiData(lat, lon);
       const weatherResponse = this.weatherService.formatCurrentWeather(weatherData, city);
-      const prompt = `${this.getSystemPrompt()}\n\nUser sent a location: ${city.name}\n\nProvide helpful information about this location.`;
-
+      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: this.getSystemPrompt() });
+      const prompt = `User sent a location: ${city.name}\n\nProvide helpful information about this location.`;
       await this.logUsage('geminiApiHits');
-      const result = await this.model.generateContent(prompt);
+      const result = await model.generateContent(prompt);
       const responseText = result.response.text();
       await this.saveConversationContext(userId, `[User sent a location: ${city.name}]`, responseText);
       return [{ type: 'text', text: `📍 **About Your Location:**\n\n${responseText}` }, weatherResponse];
@@ -613,13 +546,11 @@ class LangAI {
       return { type: 'text', text: '❌ Sorry, could not process the location.' };
     }
   }
-
   isContextualWeatherQuery(message) {
     const contextualKeywords = ['พรุ่งนี้', 'มะรืน', 'รายสัปดาห์', 'รายชั่วโมง', 'แล้วพรุ่งนี้', 'แล้วอันนี้', 'แล้ว...', 'tomorrow', 'weekly', 'hourly'];
     const lowerMessage = message.toLowerCase();
     return contextualKeywords.some(keyword => lowerMessage.includes(keyword));
   }
-
   detectQueryType(message) {
     const lowerMessage = message.toLowerCase();
     if (this.isWeatherQuery(message)) {
@@ -633,21 +564,17 @@ class LangAI {
     if (this.isTimeQuery(message)) return 'time_query';
     return 'general';
   }
-
   isWeatherQuery(message) {
     const weatherKeywords = ['อากาศ', 'สภาพอากาศ', 'ฝน', 'แดด', 'หนาว', 'ร้อน', 'เมฆ', 'ลม', 'อุณหภูมิ', 'พยากรณ์', 'weather', 'forecast', '天気'];
     return weatherKeywords.some(keyword => message.toLowerCase().includes(keyword));
   }
-
   isTimeQuery(message) {
     const timeKeywords = ['เวลา', 'วันที่', 'กี่โมง', 'ตอนนี้', 'time', 'date', '時間', '日付'];
     return timeKeywords.some(keyword => message.toLowerCase().includes(keyword));
   }
-
   createProfessionalTimeMessage() {
     const jstTime = moment().tz('Asia/Tokyo');
     const thaiTime = moment().tz('Asia/Bangkok');
-
     return {
       type: 'flex',
       altText: 'เวลาปัจจุบัน',
@@ -705,150 +632,35 @@ class LangAI {
       }
     };
   }
-  createYouTubeCarousel(introText, videos) {
-    const bubbles = videos.slice(0, 5).map(video => ({
-      type: 'bubble',
-      size: 'kilo',
-      hero: {
-        type: 'image',
-        url: video.thumbnail,
-        size: 'full',
-        aspectRatio: '16:9',
-        aspectMode: 'cover',
-        action: { type: 'uri', label: 'Play Video', uri: video.url }
-      },
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        contents: [
-          {
-            type: 'text',
-            text: video.title,
-            weight: 'bold',
-            size: 'sm',
-            wrap: true,
-            maxLines: 2
-          },
-          {
-            type: 'box',
-            layout: 'baseline',
-            margin: 'md',
-            contents: [
-              {
-                type: 'icon',
-                url: 'https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/youtube_icon.png?alt=media&token=c29e6188-f5da-48b4-9c59-d8e78e475e7d', // A generic YouTube icon
-                size: 'xs'
-              },
-              {
-                type: 'text',
-                text: video.channelTitle, // Display the channel title
-                size: 'xs',
-                color: '#8c8c8c',
-                margin: 'sm',
-                maxLines: 1
-              }
-            ]
-          }
-        ],
-        spacing: 'sm',
-        paddingAll: '12px'
-      },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: [{
-          type: 'button',
-          action: { type: 'uri', label: 'Watch Video', uri: video.url },
-          style: 'primary',
-          color: '#FF0000',
-          height: 'sm'
-        }]
-      }
-    }));
-
-    return [
-      { type: 'text', text: introText },
-      {
-        type: 'flex',
-        altText: 'Video search results from YouTube',
-        contents: {
-          type: 'carousel',
-          contents: bubbles
-        }
-      }
-    ];
-  }
-
-
   async saveConversationContext(userId, userMessage, aiResponse) {
     try {
       const conversationRef = this.db.collection('conversations').doc(userId);
       const doc = await conversationRef.get();
       let conversations = (doc.exists && doc.data().messages) ? doc.data().messages : [];
       const timestamp = new Date().toISOString();
-
       let readableAiResponse;
       if (typeof aiResponse === 'object' && aiResponse.type === 'flex') {
         readableAiResponse = aiResponse.altText || '[Flex Message]';
+      } else if (Array.isArray(aiResponse)) {
+        readableAiResponse = aiResponse.map(r => (typeof r === 'object' && r.altText) ? r.altText : '[Complex Response]').join(', ');
       } else if (typeof aiResponse === 'object') {
         readableAiResponse = '[Object Response]';
       } else {
         readableAiResponse = aiResponse;
       }
-
       conversations.push({
         userMessage: userMessage,
         aiResponse: readableAiResponse,
         timestamp: timestamp,
       });
-
       if (conversations.length > 20) {
         conversations = conversations.slice(-20);
       }
-
       await conversationRef.set({ messages: conversations, lastUpdated: new Date() }, { merge: true });
     } catch (error) {
       console.error('Error saving conversation context:', error);
     }
   }
-  async getConversationHistory(userId) {
-    const conversationRef = this.db.collection('conversations').doc(userId);
-    const doc = await conversationRef.get();
-    if (!doc.exists || !doc.data().messages) {
-      return [];
-    }
-    const messages = doc.data().messages.slice(-10); // Get last 10 exchanges
-    const history = [];
-    messages.forEach(conv => {
-      history.push({
-        role: "user",
-        parts: [{ text: conv.userMessage }],
-      });
-      history.push({
-        role: "model",
-        parts: [{ text: conv.aiResponse }],
-      });
-    });
-    return history;
-  }
-  async getConversationContext(userId) {
-    try {
-      const conversationRef = this.db.collection('conversations').doc(userId);
-      const doc = await conversationRef.get();
-      if (doc.exists && doc.data().messages) {
-        return doc.data().messages
-          .slice(-5)
-          .map(conv => `- User: ${conv.userMessage}\n- Leng: ${conv.aiResponse}`)
-          .join('\n\n');
-      }
-      return null;
-    } catch (error) {
-      console.error('Error getting conversation context:', error);
-      return null;
-    }
-  }
-
   async saveFileContext(userId, fileType, description) {
     try {
       const fileRef = this.db.collection('file_contexts').doc(userId);
@@ -861,12 +673,10 @@ class LangAI {
       console.error('Error saving file context:', error);
     }
   }
-
   async getFileContext(userId) {
     try {
       const fileRef = this.db.collection('file_contexts').doc(userId);
       const doc = await fileRef.get();
-
       if (doc.exists) {
         const data = doc.data();
         const fileTime = moment(data.timestamp.toDate());
@@ -883,36 +693,26 @@ class LangAI {
   async processYouTubeLink(url, userId) {
     try {
       console.log(`Processing YouTube link: ${url}`);
-      await this.logUsage('youtubeProcessing'); //  <--- เพิ่ม log การใช้งานใหม่
+      await this.logUsage('youtubeProcessing');
       await this.logUsage('geminiApiHits');
-
-      // ดึงบทบรรยาย (transcript) จากวิดีโอ
       const transcript = await YoutubeTranscript.fetchTranscript(url, { lang: 'en' });
       const transcriptText = transcript.map(t => t.text).join(' ');
-
       if (!transcriptText) {
         return { type: 'text', text: '✅ เล้งเห็นลิงก์ YouTube แล้ว แต่ไม่พบบทบรรยายในวิดีโอนี้ครับ เลยสรุปให้ไม่ได้' };
       }
-
-      const prompt = `${this.getSystemPrompt()}
-
-      ## Task: Summarize YouTube Video
+      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: this.getSystemPrompt() });
+      const prompt = `## Task: Summarize YouTube Video
       - You are given a transcript from a YouTube video.
       - Your task is to summarize the key points of the video in clear, easy-to-read bullet points.
       - Respond in the user's language (assume Thai unless context suggests otherwise).
       - Start with a confirmation like "✅ เล้งสรุปวิดีโอมาให้แล้วครับ:"
       - Keep it concise and informative.
-
       ## Video Transcript
       ${transcriptText.substring(0, 15000)}
-
       ## User's Request
       Summarize this video.`;
-
-      const result = await this.model.generateContent(prompt);
+      const result = await model.generateContent(prompt);
       const summary = result.response.text();
-
-      // สร้าง Flex Message ที่สวยงามพร้อมปุ่มให้ผู้ใช้เปิดดูวิดีโอได้
       const flexMessage = {
         type: 'flex',
         altText: 'สรุปเนื้อหาวิดีโอจาก YouTube',
@@ -920,7 +720,7 @@ class LangAI {
           type: 'bubble',
           hero: {
             type: 'image',
-            url: 'https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/youtube_summary_banner.png?alt=media&token=c2306fc6-d188-4e89-9a7c-6196b29f79bd', // <--- Banner สวยๆ
+            url: 'https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/youtube_summary_banner.png?alt=media&token=c2306fc6-d188-4e89-9a7c-6196b29f79bd',
             size: 'full',
             aspectRatio: '20:13',
             aspectMode: 'cover',
@@ -930,31 +730,14 @@ class LangAI {
             layout: 'vertical',
             spacing: 'md',
             contents: [
+              { type: 'text', text: 'สรุปวิดีโอ YouTube', weight: 'bold', size: 'xl' },
               {
-                type: 'text',
-                text: 'สรุปวิดีโอ YouTube',
-                weight: 'bold',
-                size: 'xl'
-              },
-              {
-                type: 'box',
-                layout: 'vertical',
-                margin: 'lg',
-                spacing: 'sm',
+                type: 'box', layout: 'vertical', margin: 'lg', spacing: 'sm',
                 contents: [
                   {
-                    type: 'box',
-                    layout: 'baseline',
-                    spacing: 'sm',
+                    type: 'box', layout: 'baseline', spacing: 'sm',
                     contents: [
-                      {
-                        type: 'text',
-                        text: summary,
-                        wrap: true,
-                        color: '#666666',
-                        size: 'sm',
-                        flex: 5
-                      }
+                      { type: 'text', text: summary, wrap: true, color: '#666666', size: 'sm', flex: 5 }
                     ]
                   }
                 ]
@@ -962,32 +745,21 @@ class LangAI {
             ]
           },
           footer: {
-            type: 'box',
-            layout: 'vertical',
-            spacing: 'sm',
+            type: 'box', layout: 'vertical', spacing: 'sm',
             contents: [
               {
-                type: 'button',
-                style: 'link',
-                height: 'sm',
-                action: {
-                  type: 'uri',
-                  label: 'เปิดวิดีโอ',
-                  uri: url
-                }
+                type: 'button', style: 'link', height: 'sm',
+                action: { type: 'uri', label: 'เปิดวิดีโอ', uri: url }
               }
             ]
           }
         }
       };
-
       await this.saveConversationContext(userId, `[User sent YouTube link: ${url}]`, summary);
       return flexMessage;
-
     } catch (error) {
       console.error('YouTube processing error:', error);
       await this.logError(error, { userId, url, location: 'processYouTubeLink' });
-      // แจ้งผู้ใช้ว่าไม่สามารถประมวลผลได้ แต่ยังคงส่งลิงก์ให้เปิดดูเองได้
       const errorMessage = {
         type: 'flex',
         altText: 'ไม่สามารถประมวลผลวิดีโอได้',
@@ -1002,8 +774,7 @@ class LangAI {
             ]
           },
           footer: {
-            type: 'box',
-            layout: 'vertical',
+            type: 'box', layout: 'vertical',
             contents: [{
               type: 'button',
               action: { type: 'uri', label: 'ลองเปิดวิดีโอด้วยตัวเอง', uri: url },
@@ -1017,6 +788,5 @@ class LangAI {
     }
   }
 }
-
 
 module.exports = LangAI;
