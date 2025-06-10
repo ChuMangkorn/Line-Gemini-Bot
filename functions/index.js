@@ -222,6 +222,46 @@ exports.getErrors = onRequest({ secrets: [] }, (req, res) => {
   };
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
+exports.adminReply = onRequest({ secrets: [lineChannelAccessToken] }, (req, res) => {
+  const handler = async (req, res) => {
+    const { userId, message } = req.body;
+    if (!userId || !message) {
+      return res.status(400).json({ error: 'userId and message are required.' });
+    }
+
+    const client = new Client({ channelAccessToken: lineChannelAccessToken.value() });
+
+    try {
+      // 1. ส่งข้อความ Push Message ไปหาผู้ใช้
+      // เราเติม [ADMIN] เข้าไปเพื่อให้ผู้ใช้รู้ว่าแอดมินเป็นคนตอบ
+      await client.pushMessage(userId, { type: 'text', text: `[ADMIN] ${message}` });
+
+      // 2. บันทึกข้อความของแอดมินลงในประวัติการสนทนา
+      const conversationRef = db.collection('conversations').doc(userId);
+      const doc = await conversationRef.get();
+      let conversations = (doc.exists && doc.data().messages) ? doc.data().messages : [];
+
+      conversations.push({
+        userMessage: '[Message from Admin]', // ใช้เป็นตัวแยกแยะว่าเป็นข้อความจากแอดมิน
+        aiResponse: message, // เนื้อหาข้อความจริง ๆ
+        timestamp: new Date().toISOString(),
+      });
+
+      if (conversations.length > 20) {
+        conversations = conversations.slice(-20);
+      }
+
+      await conversationRef.set({ messages: conversations, lastUpdated: new Date() }, { merge: true });
+
+      res.status(200).json({ success: true });
+
+    } catch (error) {
+      console.error("Admin reply error:", error);
+      res.status(500).json({ error: 'Failed to send admin reply.' });
+    }
+  };
+  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+});
 
 exports.health = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
