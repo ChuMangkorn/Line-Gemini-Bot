@@ -50,7 +50,7 @@
 ## 📦 การติดตั้ง
 
 ### ข้อกำหนดเบื้องต้น
-- Node.js 18+
+- Node.js 22
 - Firebase CLI
 - LINE Developer Account
 - Google AI Studio API Key
