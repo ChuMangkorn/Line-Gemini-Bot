@@ -86,7 +86,6 @@
   <div id="loading-spinner" class="fixed inset-0 flex items-center justify-center z-50"><i data-lucide="loader-circle"
       class="w-12 h-12 text-sky-500 animate-spin"></i></div>
   <div id="dashboard-content" class="max-w-7xl mx-auto hidden">
-    <!-- Header -->
     <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
       <div>
         <h1 class="text-3xl font-bold text-white">Leng AI Command Center</h1>
@@ -106,7 +105,6 @@
       </div>
     </header>
 
-    <!-- Date Range Filter -->
     <div class="mb-6 flex items-center justify-between">
       <div id="date-range-filter" class="flex space-x-2 rounded-lg bg-slate-700 p-1"><button
           class="date-btn px-4 py-1.5 text-sm rounded-md active" data-range="today">Today</button><button
@@ -116,9 +114,7 @@
       </p>
     </div>
 
-    <!-- Main Content Grid -->
     <main class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-      <!-- Stats Cards -->
       <div class="stat-card p-6 rounded-lg">
         <div class="flex items-center"><i data-lucide="inbox" class="w-8 h-8 text-sky-400"></i>
           <p class="ml-4 text-sm font-medium text-slate-400">LINE OA Events</p>
@@ -144,7 +140,6 @@
         <p id="est-cost" class="text-4xl font-bold text-white mt-4">$0.00</p>
       </div>
 
-      <!-- Charts and Logs -->
       <div class="stat-card p-6 rounded-lg md:col-span-2 lg:col-span-2">
         <h3 class="text-lg font-semibold text-white">Processing Breakdown</h3>
         <div class="h-64 mt-4 flex items-center justify-center"><canvas id="processing-chart"></canvas></div>
@@ -155,22 +150,27 @@
       </div>
 
       <div class="stat-card p-6 rounded-lg md:col-span-2">
-        <h3 class="text-lg font-semibold text-white mb-4">📢 Broadcast Message</h3><textarea id="broadcast-message"
-          class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-white"
-          placeholder="Type a message to send to all users..."></textarea><button id="send-broadcast-btn"
-          class="mt-2 w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-md">Send
-          Broadcast</button>
+        <h3 class="text-lg font-semibold text-white mb-4">📢 Broadcast Message</h3>
+        <textarea id="broadcast-message" class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-white"
+          placeholder="Type a message to send to all users..."></textarea>
+        <button id="send-broadcast-btn"
+          class="mt-2 w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2">
+          <i data-lucide="send" class="w-4 h-4"></i>
+          Send Broadcast
+        </button>
       </div>
       <div class="stat-card p-6 rounded-lg md:col-span-2">
         <h3 class="text-lg font-semibold text-white mb-4">Recent Errors</h3>
-        <div id="error-log" class="text-xs text-red-400 space-y-2 overflow-y-auto max-h-48"></div>
+        <div id="error-log" class="text-sm space-y-2 overflow-y-auto max-h-48">
+          <p class="text-slate-400">Loading errors...</p>
+        </div>
       </div>
 
       <div class="stat-card p-6 rounded-lg col-span-full">
         <h3 class="text-lg font-semibold text-white mb-4">User & Conversation Log</h3>
         <div class="relative"><i data-lucide="search"
             class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400"></i><input type="text"
-            id="search-log" placeholder="Search logs..."
+            id="search-log" placeholder="Search logs by User ID, Name, or Message..."
             class="w-full bg-slate-800 border border-slate-600 rounded-md py-2 pl-10 pr-4 text-white"></div>
         <div class="mt-4 max-h-[600px] overflow-y-auto">
           <table class="w-full text-left text-sm">
@@ -178,7 +178,7 @@
               <tr>
                 <th class="p-3">User</th>
                 <th class="p-3">Last Message</th>
-                <th class="p-3">Status</th>
+                <th class="p-3">AI Response</th>
                 <th class="p-3 text-center">Actions</th>
               </tr>
             </thead>
@@ -189,7 +189,6 @@
     </main>
   </div>
 
-  <!-- Modal -->
   <div id="log-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden modal-backdrop">
     <div class="bg-slate-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
       <header class="flex items-center justify-between p-4 border-b border-slate-700">
@@ -210,41 +209,46 @@
     (async function main() {
       try {
         const response = await fetch(window.location.origin + '/getFirebaseConfig');
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Could not fetch Firebase config. Status: ${response.status}. Body: ${errorText}`);
-        }
-        const firebaseConfig = await response.json();
+        if (!response.ok) throw new Error(`Could not fetch Firebase config.`);
 
+        const firebaseConfig = await response.json();
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
 
-
         const ui = {
           loadingSpinner: document.getElementById('loading-spinner'),
           dashboardContent: document.getElementById('dashboard-content'),
-          lineEvents: document.getElementById('line-events'), geminiCalls: document.getElementById('gemini-calls'),
-          uniqueUsers: document.getElementById('unique-users'), totalConversations: document.getElementById('total-conversations'),
-          logBody: document.getElementById('conversation-log'), lastUpdated: document.getElementById('last-updated'),
-          searchInput: document.getElementById('search-log'), modal: document.getElementById('log-modal'),
-          modalTitle: document.getElementById('modal-title'), modalBody: document.getElementById('modal-body'),
-          closeModalBtn: document.getElementById('close-modal-btn'), modalUserAvatar: document.getElementById('modal-user-avatar'),
-          adminMenu: document.getElementById('admin-menu'), adminMenuButton: document.getElementById('admin-menu-button'),
-          adminDropdown: document.getElementById('admin-dropdown'), adminAvatar: document.getElementById('admin-avatar'),
-          adminName: document.getElementById('admin-name'), logoutBtn: document.getElementById('logout-btn'),
-          dateRangeFilter: document.getElementById('date-range-filter')
+          lineEvents: document.getElementById('line-events'),
+          geminiCalls: document.getElementById('gemini-calls'),
+          errorCount: document.getElementById('error-count'),
+          estCost: document.getElementById('est-cost'),
+          logBody: document.getElementById('conversation-log'),
+          lastUpdated: document.getElementById('last-updated'),
+          searchInput: document.getElementById('search-log'),
+          modal: document.getElementById('log-modal'),
+          modalTitle: document.getElementById('modal-title'),
+          modalBody: document.getElementById('modal-body'),
+          closeModalBtn: document.getElementById('close-modal-btn'),
+          modalUserAvatar: document.getElementById('modal-user-avatar'),
+          adminMenu: document.getElementById('admin-menu'),
+          adminMenuButton: document.getElementById('admin-menu-button'),
+          adminDropdown: document.getElementById('admin-dropdown'),
+          adminAvatar: document.getElementById('admin-avatar'),
+          adminName: document.getElementById('admin-name'),
+          logoutBtn: document.getElementById('logout-btn'),
+          dateRangeFilter: document.getElementById('date-range-filter'),
+          broadcastMessage: document.getElementById('broadcast-message'), // [ADD]
+          sendBroadcastBtn: document.getElementById('send-broadcast-btn'), // [ADD]
+          errorLog: document.getElementById('error-log') // [ADD]
         };
 
         const processingChart = new Chart(document.getElementById('processing-chart').getContext('2d'), {
-          type: 'doughnut',
-          data: { labels: ['Text', 'Image', 'Audio', 'Video', 'File', 'Location'], datasets: [{ data: [0, 0, 0, 0, 0, 0], backgroundColor: ['#3b82f6', '#8b5cf6', '#10b981', '#f97316', '#64748b', '#f59e0b'], borderColor: '#1e293b', borderWidth: 4 }] },
+          type: 'doughnut', data: { labels: ['Text', 'Image', 'Audio', 'Video', 'File', 'Location'], datasets: [{ data: [0, 0, 0, 0, 0, 0], backgroundColor: ['#3b82f6', '#8b5cf6', '#10b981', '#f97316', '#64748b', '#f59e0b'], borderColor: '#1e293b', borderWidth: 4 }] },
           options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#e2e8f0' } } } }
         });
-
         const activityChart = new Chart(document.getElementById('activity-chart').getContext('2d'), {
-          type: 'bar',
-          data: { labels: [], datasets: [{ label: 'LINE Events', data: [], backgroundColor: '#3b82f6' }, { label: 'Gemini Calls', data: [], backgroundColor: '#8b5cf6' }] },
+          type: 'bar', data: { labels: [], datasets: [{ label: 'LINE Events', data: [], backgroundColor: '#3b82f6' }, { label: 'Gemini Calls', data: [], backgroundColor: '#8b5cf6' }] },
           options: { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { color: '#94a3b8' } }, y: { beginAtZero: true, ticks: { color: '#94a3b8' } } }, plugins: { legend: { labels: { color: '#e2e8f0' } } } }
         });
 
@@ -252,82 +256,54 @@
         const userCache = new Map();
         let listenersInitialized = false;
 
-        onAuthStateChanged(auth, async (user) => {
+        onAuthStateChanged(auth, user => {
           if (user) {
             if (!listenersInitialized) {
               ui.adminName.textContent = user.displayName || user.email;
               ui.adminAvatar.src = user.photoURL || `https://placehold.co/40x40/64748b/e2e8f0?text=${(user.email || 'A').charAt(0)}`;
-              ui.adminMenu.classList.remove('hidden');
               ui.loadingSpinner.classList.add('hidden');
               ui.dashboardContent.classList.remove('hidden');
-
               initDashboard();
               listenersInitialized = true;
             }
-          } else {
-            window.location.href = window.location.origin + '/login';
-          }
+          } else { window.location.href = window.location.origin + '/login'; }
         });
 
-        async function fetchDataForRange(range) {
+        let statsListener = null;
+        function fetchDataForRange(range) {
           const endDate = moment().format('YYYY-MM-DD');
           let startDate;
           if (range === 'today') startDate = endDate;
           else if (range === '7d') startDate = moment().subtract(6, 'days').format('YYYY-MM-DD');
           else if (range === '30d') startDate = moment().subtract(29, 'days').format('YYYY-MM-DD');
-
-          try {
-            const q = query(
-              collection(db, 'daily_stats'),
-              where(documentId(), '>=', startDate),
-              where(documentId(), '<=', endDate)
-            );
-            const snapshot = await getDocs(q);
-            // [FIX] Correctly initialize the processing object with all keys
-            const stats = {
-              totalLineEvents: 0,
-              totalGeminiHits: 0,
-              processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0 },
-              dailyActivity: {}
-            };
-
+          if (statsListener) statsListener();
+          const q = query(collection(db, 'daily_stats'), where(documentId(), '>=', startDate), where(documentId(), '<=', endDate));
+          statsListener = onSnapshot(q, snapshot => {
+            const stats = { totalLineEvents: 0, totalGeminiHits: 0, processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0, errors: 0 }, dailyActivity: {} };
             snapshot.forEach(doc => {
               const data = doc.data();
-              stats.dailyActivity[doc.id] = {
-                lineOaEvents: data.lineOaEvents || 0,
-                geminiApiHits: data.geminiApiHits || 0,
-              };
+              stats.dailyActivity[doc.id] = { lineOaEvents: data.lineOaEvents || 0, geminiApiHits: data.geminiApiHits || 0 };
               stats.totalLineEvents += data.lineOaEvents || 0;
               stats.totalGeminiHits += data.geminiApiHits || 0;
-              // [FIX] Correctly iterate and add stats
-              Object.keys(stats.processing).forEach(key => {
-                if (data[key]) {
-                  stats.processing[key] += data[key];
-                }
-              });
+              Object.keys(stats.processing).forEach(key => { if (data[key]) stats.processing[key] += data[key]; });
             });
             updateDashboardUI(stats);
-          } catch (error) {
-            console.error("Initialization failed:", error);
-            document.body.innerHTML = `<div class="text-center p-8 text-red-400"><h1>Dashboard failed to load.</h1><p>${error.message}</p></div>`;
-          }
+          }, error => console.error("Error fetching stats:", error));
         }
 
         function updateDashboardUI(stats) {
-          ui.lineEvents.textContent = stats.totalLineEvents || 0;
-          ui.geminiCalls.textContent = stats.totalGeminiHits || 0;
-
+          ui.lineEvents.textContent = (stats.totalLineEvents || 0).toLocaleString();
+          ui.geminiCalls.textContent = (stats.totalGeminiHits || 0).toLocaleString();
+          ui.errorCount.textContent = (stats.processing.errors || 0).toLocaleString();
+          const COST_PER_1000_FLASH_REQUESTS = 0.06;
+          const estimatedCost = ((stats.totalGeminiHits || 0) / 1000) * COST_PER_1000_FLASH_REQUESTS;
+          ui.estCost.textContent = `$${estimatedCost.toFixed(4)}`;
           const processing = stats.processing || {};
-          processingChart.data.datasets[0].data = [
-            processing.textProcessing, processing.imageProcessing,
-            processing.audioProcessing, processing.videoProcessing,
-            processing.fileProcessing, processing.locationProcessing
-          ].map(v => v || 0);
+          processingChart.data.datasets[0].data = [processing.textProcessing, processing.imageProcessing, processing.audioProcessing, processing.videoProcessing, processing.fileProcessing, processing.locationProcessing].map(v => v || 0);
           processingChart.update();
-
           const daily = stats.dailyActivity || {};
           const labels = Object.keys(daily).sort();
-          activityChart.data.labels = labels;
+          activityChart.data.labels = labels.map(l => moment(l).format('MMM D'));
           activityChart.data.datasets[0].data = labels.map(label => daily[label]?.lineOaEvents || 0);
           activityChart.data.datasets[1].data = labels.map(label => daily[label]?.geminiApiHits || 0);
           activityChart.update();
@@ -336,26 +312,21 @@
 
         function initDashboard() {
           fetchDataForRange('today');
+          fetchAndRenderErrors();
+          setInterval(fetchAndRenderErrors, 60000); // Auto-refresh errors every minute
 
           const convQuery = query(collection(db, "conversations"), orderBy("lastUpdated", "desc"));
-          onSnapshot(convQuery, (snapshot) => {
-            const todayUsers = new Set();
+          onSnapshot(convQuery, snapshot => {
             allConversations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
             allConversations.forEach(convo => {
-              if (convo.lastUpdated?.toDate && moment(convo.lastUpdated.toDate()).isSame(moment(), 'day')) {
-                todayUsers.add(convo.id);
-              }
               if (!userCache.has(convo.id)) {
                 const userProfileRef = doc(db, "users", convo.id, "profile", "info");
-                onSnapshot(userProfileRef, (profileDoc) => {
+                onSnapshot(userProfileRef, profileDoc => {
                   userCache.set(convo.id, profileDoc.exists() ? profileDoc.data() : { displayName: `User...${convo.id.slice(-4)}` });
                   renderConversations();
                 });
               }
             });
-            ui.totalConversations.textContent = snapshot.size;
-            ui.uniqueUsers.textContent = todayUsers.size;
             renderConversations();
           });
         }
@@ -370,90 +341,96 @@
               lastMessage.userMessage?.toLowerCase().includes(searchTerm) ||
               lastMessage.aiResponse?.toLowerCase().includes(searchTerm);
           });
-
           ui.logBody.innerHTML = filtered.slice(0, 100).map(convo => {
             const user = userCache.get(convo.id) || { displayName: `...${convo.id.slice(-6)}`, pictureUrl: '' };
             const lastMessage = convo.messages?.slice(-1)[0] || { userMessage: '', aiResponse: '' };
             const placeholderImg = `https://placehold.co/40x40/334155/e2e8f0?text=${(user.displayName || '?').charAt(0)}`;
+            const lastUpdatedText = convo.lastUpdated ? moment(convo.lastUpdated.toDate()).fromNow() : 'N/A';
             return `
-                             <tr class="border-b border-slate-700 hover:bg-slate-800/50">
-                                 <td class="p-3"><div class="flex items-center"><img src="${user.pictureUrl || placeholderImg}" class="w-8 h-8 rounded-full mr-3" onerror="this.src='${placeholderImg}'"><p class="font-medium text-white">${user.displayName}</p></div></td>
-                                 <td class="p-3 text-slate-300 max-w-xs truncate" title="${lastMessage.userMessage}">${lastMessage.userMessage}</td>
-                                 <td class="p-3 text-slate-300 max-w-xs truncate" title="${lastMessage.aiResponse}">${lastMessage.aiResponse}</td>
-                                 <td class="p-3 text-center">
-                                     <button class="view-log-btn text-sky-400 hover:text-sky-300 text-xs font-semibold py-1 px-2 rounded-md bg-sky-500/10 hover:bg-sky-500/20" data-userid="${convo.id}">View Log</button>
-                                 </td>
-                             </tr>
-                         `;
-          }).join('');
+                 <tr class="border-b border-slate-700 hover:bg-slate-800/50">
+                     <td class="p-3">
+                         <div class="flex items-center">
+                            <img src="${user.pictureUrl || placeholderImg}" class="w-8 h-8 rounded-full mr-3" onerror="this.src='${placeholderImg}'">
+                            <div><p class="font-medium text-white">${user.displayName}</p><p class="text-xs text-slate-400">${lastUpdatedText}</p></div>
+                         </div>
+                     </td>
+                     <td class="p-3 text-slate-300 max-w-xs truncate" title="${lastMessage.userMessage}">${lastMessage.userMessage || '...'}</td>
+                     <td class="p-3 text-slate-300 max-w-xs truncate" title="${lastMessage.aiResponse}">${lastMessage.aiResponse || '...'}</td>
+                     <td class="p-3 text-center">
+                         <button class="view-log-btn text-sky-400 hover:text-sky-300 text-xs font-semibold py-1 px-2 rounded-md bg-sky-500/10 hover:bg-sky-500/20" data-userid="${convo.id}">View Log</button>
+                     </td>
+                 </tr>`;
+          }).join('') || `<tr><td colspan="4" class="text-center p-4 text-slate-400">No conversations found.</td></tr>`;
         }
 
         let currentUnsubscribe;
-        async function openLogModal(userId) {
+        function openLogModal(userId) {
           if (currentUnsubscribe) currentUnsubscribe();
-
           const user = userCache.get(userId) || { displayName: `User ...${userId.slice(-6)}` };
           const placeholderImg = `https://placehold.co/40x40/334155/e2e8f0?text=${(user.displayName || '?').charAt(0)}`;
           ui.modalTitle.textContent = `Conversation with ${user.displayName}`;
           ui.modalUserAvatar.src = user.pictureUrl || placeholderImg;
           ui.modalBody.innerHTML = '<p class="text-slate-400">Loading history...</p>';
           ui.modal.classList.remove('hidden');
-
           const convoDocRef = doc(db, "conversations", userId);
-
-          currentUnsubscribe = onSnapshot(convoDocRef, (doc) => {
-            if (!doc.exists() || !doc.data().messages) {
-              ui.modalBody.innerHTML = '<p class="text-slate-400">No conversation history found.</p>';
-              return;
-            }
+          currentUnsubscribe = onSnapshot(convoDocRef, doc => {
+            if (!doc.exists() || !doc.data().messages) { ui.modalBody.innerHTML = '<p class="text-slate-400">No history found.</p>'; return; }
             const messages = doc.data().messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
             ui.modalBody.innerHTML = messages.map(msg => {
               const userAvatarHtml = `<img src="${user.pictureUrl || placeholderImg}" class="chat-avatar" onerror="this.src='${placeholderImg}'">`;
-              const aiAvatarHtml = `<img src="https://placehold.co/40x40/8b5cf6/ffffff?text=L" class="chat-avatar">`;
-
-              return `
-                                <div class="chat-message user">
-                                    <div class="chat-bubble user"><p>${msg.userMessage}</p><time class="text-xs text-sky-200 mt-1 block">${moment(msg.timestamp).format('HH:mm')}</time></div>
-                                    ${userAvatarHtml}
-                                </div>
-                                <div class="chat-message ai">
-                                    ${aiAvatarHtml}
-                                     <div class="chat-bubble ai"><p>${msg.aiResponse}</p><time class="text-xs text-slate-400 mt-1 block">${moment(msg.timestamp).add(1, 'second').format('HH:mm')}</time></div>
-                                </div>
-                            `;
+              const aiAvatarHtml = `<img src="https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/logo_leng.png?alt=media&token=16a24559-994f-4d56-a36a-f5a89f9e7421" class="chat-avatar">`;
+              return `<div class="chat-message user"><div class="chat-bubble user"><p>${msg.userMessage || '[Media]'}</p><time class="text-xs text-sky-200 mt-1 block">${moment(msg.timestamp).format('HH:mm')}</time></div>${userAvatarHtml}</div><div class="chat-message ai">${aiAvatarHtml}<div class="chat-bubble ai"><p>${msg.aiResponse || '[Media]'}</p><time class="text-xs text-slate-400 mt-1 block">${moment(msg.timestamp).add(1, 'second').format('HH:mm')}</time></div></div>`;
             }).join('');
             ui.modalBody.scrollTop = ui.modalBody.scrollHeight;
           });
         }
 
-        // --- Event Listeners ---
-        ui.logBody.addEventListener('click', (e) => { if (e.target.classList.contains('view-log-btn')) openLogModal(e.target.dataset.userid); });
-        const closeModal = () => {
-          if (currentUnsubscribe) currentUnsubscribe();
-          ui.modal.classList.add('hidden');
-        };
-        ui.closeModalBtn.addEventListener('click', closeModal);
-        ui.modal.addEventListener('click', (e) => { if (e.target === ui.modal) closeModal(); });
+        async function fetchAndRenderErrors() { // [ADD]
+          try {
+            const response = await fetch('/api/getErrors');
+            if (!response.ok) { ui.errorLog.innerHTML = '<p>Could not load errors.</p>'; return; }
+            const errors = await response.json();
+            if (errors.length === 0) { ui.errorLog.innerHTML = '<p class="text-slate-400">No errors recorded.</p>'; return; }
+            ui.errorLog.innerHTML = errors.map(err => `
+                    <div class="border-b border-slate-700/50 pb-2 mb-2">
+                        <p class="font-semibold text-red-400 truncate" title="${err.message}">${err.message}</p>
+                        <p class="text-slate-400">Context: ${err.context?.location || 'N/A'}</p>
+                        <p class="text-slate-500 text-xs">${moment(err.timestamp).fromNow()}</p>
+                    </div>`).join('');
+          } catch (error) { console.error('Failed to fetch errors:', error); }
+        }
 
+        // --- Event Listeners ---
+        ui.logBody.addEventListener('click', e => { if (e.target.classList.contains('view-log-btn')) openLogModal(e.target.dataset.userid); });
+        const closeModal = () => { if (currentUnsubscribe) currentUnsubscribe(); ui.modal.classList.add('hidden'); };
+        ui.closeModalBtn.addEventListener('click', closeModal);
+        ui.modal.addEventListener('click', e => { if (e.target === ui.modal) closeModal(); });
         ui.searchInput.addEventListener('input', renderConversations);
         ui.adminMenuButton.addEventListener('click', () => ui.adminDropdown.classList.toggle('hidden'));
-        document.addEventListener('click', (e) => {
-          if (!ui.adminMenu.contains(e.target)) ui.adminDropdown.classList.add('hidden');
-        });
-        ui.logoutBtn.addEventListener('click', async () => {
-          try {
-            await signOut(auth);
-            await fetch(window.location.origin + '/sessionLogout', { method: 'POST' });
-            window.location.href = window.location.origin + '/login';
-          } catch (error) { console.error('Logout failed:', error); }
-        });
+        document.addEventListener('click', e => { if (!ui.adminMenu.contains(e.target)) ui.adminDropdown.classList.add('hidden'); });
+        ui.logoutBtn.addEventListener('click', async () => { try { await signOut(auth); await fetch(window.location.origin + '/sessionLogout', { method: 'POST' }); window.location.href = window.location.origin + '/login'; } catch (error) { console.error('Logout failed:', error); } });
+        ui.dateRangeFilter.addEventListener('click', e => { if (e.target.tagName === 'BUTTON' && !e.target.classList.contains('active')) { document.querySelector('.date-btn.active').classList.remove('active'); e.target.classList.add('active'); fetchDataForRange(e.target.dataset.range); } });
 
-        ui.dateRangeFilter.addEventListener('click', (e) => {
-          if (e.target.tagName === 'BUTTON' && !e.target.classList.contains('active')) {
-            document.querySelector('.date-btn.active').classList.remove('active');
-            e.target.classList.add('active');
-            fetchDataForRange(e.target.dataset.range);
-          }
+        ui.sendBroadcastBtn.addEventListener('click', async () => { // [ADD]
+          const message = ui.broadcastMessage.value.trim();
+          if (!message) return alert('Broadcast message cannot be empty.');
+          if (!confirm(`Are you sure you want to broadcast this message to all users?\n\n"${message}"`)) return;
+
+          const originalButtonHTML = ui.sendBroadcastBtn.innerHTML;
+          ui.sendBroadcastBtn.disabled = true;
+          ui.sendBroadcastBtn.innerHTML = '<i data-lucide="loader-circle" class="w-4 h-4 animate-spin"></i> Sending...';
+          lucide.createIcons();
+
+          try {
+            const response = await fetch('/api/sendBroadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+            const result = await response.json();
+            if (response.ok) {
+              alert(result.message);
+              ui.broadcastMessage.value = '';
+            } else { throw new Error(result.error || 'Unknown error'); }
+          } catch (error) {
+            alert(`Broadcast failed: ${error.message}`);
+          } finally { ui.sendBroadcastBtn.disabled = false; ui.sendBroadcastBtn.innerHTML = originalButtonHTML; lucide.createIcons(); }
         });
 
         lucide.createIcons();
