@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://media.licdn.com/media/AAYQAQSOAAgAAQAAAAAAAB-zrMZEDXI2T62PSuT6kpB6qg.png" alt="Leng AI Logo" width="150"/>
+  <img src="https://portfolio-omega-livid-27.vercel.app/_next/image?url=%2Fprofile.jpg&w=384&q=75" alt="Leng AI Logo" width="150"/>
 </p>
 
 <h1 align="center">เล้ง AI - LINE Bot ผู้ช่วยอัจฉริยะ</h1>
