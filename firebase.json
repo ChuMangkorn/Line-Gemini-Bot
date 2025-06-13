@@ -63,10 +63,6 @@
         "function": "getErrors"
       },
       {
-        "source": "/api/adminReply",
-        "function": "adminReply"
-      },
-      {
         "source": "/health",
         "function": "health"
       }

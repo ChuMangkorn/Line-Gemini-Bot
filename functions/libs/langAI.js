@@ -1,4 +1,4 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const moment = require('moment-timezone');
@@ -7,6 +7,7 @@ const MultimodalProcessor = require('./multimodal');
 const { YoutubeTranscript } = require('youtube-transcript');
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const YouTubeService = require('./youtubeService');
+const BrowserService = require('./browserService');
 
 class LangAI {
   constructor(adminId, youtubeApiKey) {
@@ -27,15 +28,44 @@ class LangAI {
               },
               required: ['query']
             }
+          },
+          {
+            name: 'browseWebsite',
+            description: 'Fetches the main text content of a public website from a given URL. Use this tool when a user provides a URL and asks to summarize, analyze, read, or get information from it.',
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                url: { type: 'STRING', description: 'The full URL of the website to browse.' }
+              },
+              required: ['url']
+            }
           }
         ]
       }
     ];
+    const safetySettings = [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ];
 
     try {
       this.genAI = new GoogleGenerativeAI(geminiApiKey.value());
-      this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash', tools: tools });
-      console.log('✅ Gemini API connected successfully');
+      this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash', tools: tools, safetySettings: safetySettings });
+      console.log('✅ Gemini API connected successfully with custom safety settings.');
     } catch (error) {
       console.error('❌ Gemini API connection failed:', error);
       this.model = null;
@@ -45,6 +75,7 @@ class LangAI {
     this.weatherService = new WeatherService();
     this.multimodal = new MultimodalProcessor();
     this.youtubeService = new YouTubeService(youtubeApiKey);
+    this.browserService = new BrowserService();
     this.adminId = adminId;
 
     this.getSystemPrompt = () => {
@@ -72,6 +103,7 @@ class LangAI {
       - **Contextual Memory:** You can recall previous messages and files in the current conversation to provide seamless and intelligent responses.
       - **Multimodal Analysis:** You are an expert at analyzing and answering questions about text, images, audio, video, and documents.
       - **Youtube:** You can search for YouTube videos when a user asks for a clip or video on a certain topic.
+      - **Web Browse:** You can access and summarize content from any public website URL using your browseWebsite tool.
       - **Weather Forecasting:** You can provide detailed, accurate weather forecasts using the One Call API 3.0.
       - **General Knowledge:** You can answer a wide range of questions on various topics.`;
     };
@@ -270,6 +302,7 @@ class LangAI {
   // =================================================================
   //  ✅ Main Processing Logic
   // =================================================================
+
   async processTextMessage(message, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -282,13 +315,12 @@ class LangAI {
     const urls = message.match(urlRegex);
     if (urls && urls[0]) {
       const url = urls[0];
-      const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/;
-      if (youtubeRegex.test(url)) {
-        return this.processYouTubeLink(url, userId);
+      if (message.trim() === url) {
+        console.log(`URL detected. Re-framing query for summarization: ${url}`);
+        const explicitQuery = `ช่วยสรุปเนื้อหาจากลิงก์นี้ให้หน่อย: ${url}`;
+        return this.processGeneralQuery(explicitQuery, userId);
       } else {
-        const responseText = `✅ เล้งเห็นลิงก์ที่คุณส่งมาแล้วครับ: ${url}\n\nตอนนี้เล้งยังไม่สามารถเข้าถึงเนื้อหาจากเว็บไซต์ทั่วไปได้โดยตรง แต่สำหรับลิงก์ YouTube เล้งสามารถสรุปให้ได้นะครับ!`;
-        await this.saveConversationContext(userId, `[User sent a link: ${url}]`, responseText);
-        return { type: 'text', text: responseText };
+        return this.processGeneralQuery(message, userId);
       }
     }
 
@@ -354,28 +386,42 @@ class LangAI {
       const functionCalls = response.functionCalls();
 
       if (functionCalls && functionCalls.length > 0) {
-        if (functionCalls[0].name === 'Youtube') {
-          const { query } = functionCalls[0].args;
+        const call = functionCalls[0];
+        let functionResponsePayload;
+
+        if (call.name === 'browseWebsite') {
+          console.log(`🤖 Gemini wants to browse: ${call.args.url}`);
+          const { url } = call.args;
+          try {
+            const content = await this.browserService.browse(url);
+            functionResponsePayload = { results: content };
+          } catch (e) {
+            functionResponsePayload = { error: e.message };
+          }
+        }
+        else if (call.name === 'Youtube') {
+          console.log(`🤖 Gemini wants to search YouTube: ${call.args.query}`);
+          const { query } = call.args;
           const searchResults = await this.youtubeService.search(query);
+          functionResponsePayload = { results: searchResults };
+        }
+
+        if (functionResponsePayload) {
           const result2 = await this.model.generateContent({
             contents: [
               { role: 'user', parts: [{ text: prompt }] },
-              { role: 'model', parts: [{ functionCall: functionCalls[0] }] },
+              { role: 'model', parts: [{ functionCall: call }] },
               {
                 role: 'function',
-                parts: [{
-                  functionResponse: {
-                    name: 'Youtube',
-                    response: { results: searchResults }
-                  }
-                }]
+                parts: [{ functionResponse: { name: call.name, response: functionResponsePayload } }]
               }
             ]
           });
           const finalText = result2.response.text();
           await this.saveConversationContext(userId, message, finalText);
-          if (searchResults && searchResults.length > 0) {
-            return this.createYouTubeCarousel(finalText, searchResults);
+
+          if (call.name === 'Youtube' && functionResponsePayload.results?.length > 0) {
+            return this.createYouTubeCarousel(finalText, functionResponsePayload.results);
           }
           return { type: 'text', text: finalText };
         }

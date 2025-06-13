@@ -9,12 +9,16 @@ const fs = require('fs');
 const path = require('path');
 const cookieParser = require('cookie-parser');
 const { collection, query, where, getDocs, documentId, orderBy, limit } = require('firebase-admin/firestore');
-const { FieldPath } = require('firebase-admin/firestore');
 
 admin.initializeApp();
 const db = admin.firestore();
 
-setGlobalOptions({ region: 'asia-southeast1', memory: '2GiB', timeoutSeconds: 60 });
+setGlobalOptions({
+  region: 'asia-southeast1',
+  memory: '2GiB',
+  timeoutSeconds: 540,
+  cpu: 2
+});
 
 // --- Define Secrets ---
 const lineChannelSecret = defineSecret('LINE_CHANNEL_SECRET');
@@ -35,7 +39,8 @@ const authenticate = async (req, res, next) => {
     return res.redirect(302, '/login');
   }
   try {
-    await admin.auth().verifySessionCookie(sessionCookie, true);
+    const decodedClaims = await admin.auth().verifySessionCookie(sessionCookie, true);
+    req.user = decodedClaims; 
     return next();
   } catch (error) {
     return res.redirect(302, '/login');
@@ -86,40 +91,39 @@ exports.dashboard = onRequest({ secrets: [] }, (req, res) => {
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
 
-exports.login = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
+exports.login = onRequest({ secrets: [] }, (req, res) => {
   try {
     const loginPath = path.join(__dirname, 'login.html');
     res.status(200).send(fs.readFileSync(loginPath, 'utf8'));
   } catch (error) { res.status(500).send("Error loading login page."); }
 });
 
-exports.sessionLogin = onRequest({ invoker: 'public', secrets: [] }, async (req, res) => {
+exports.sessionLogin = onRequest({ secrets: [] }, async (req, res) => {
   const idToken = req.body.idToken?.toString();
   if (!idToken) return res.status(400).send('ID token is required.');
-  const expiresIn = 60 * 60 * 24 * 5 * 1000;
+  const expiresIn = 60 * 60 * 24 * 5 * 1000; // 5 days
   try {
     const sessionCookie = await admin.auth().createSessionCookie(idToken, { expiresIn });
-    res.cookie('__session', sessionCookie, { maxAge: expiresIn, httpOnly: true, secure: true, path: '/' });
+    res.cookie('__session', sessionCookie, { maxAge: expiresIn, httpOnly: true, secure: true, sameSite: 'strict' });
     res.status(200).json({ status: 'success' });
   } catch (error) { res.status(401).send('UNAUTHORIZED REQUEST!'); }
 });
 
-exports.sessionLogout = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
+exports.sessionLogout = onRequest({ secrets: [] }, (req, res) => {
   res.clearCookie('__session');
-  res.status(200).json({ status: 'success' });
+  res.redirect('/login');
 });
 
 exports.getFirebaseConfig = onRequest({ secrets: [] }, (req, res) => {
   const handler = (req, res) => {
     try {
       const firebaseConfig = {
-        apiKey: "AIzaSyBoZ5V8dnlQEpPxWBk47LLDH1c4UzOMHAw",
-        authDomain: "ryuestai.firebaseapp.com",
-        projectId: "ryuestai",
-        storageBucket: "ryuestai.appspot.com",
-        messagingSenderId: "988307531263",
-        appId: "1:988307531263:web:5dec3f61ec3c113dfcb3ca",
-        measurementId: "G-X60N12YFQW"
+        apiKey: process.env.FIREBASE_API_KEY, // Use environment variables
+        authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+        projectId: process.env.GCLOUD_PROJECT,
+        storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+        messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+        appId: process.env.FIREBASE_APP_ID,
       };
       res.status(200).json(firebaseConfig);
     } catch (error) { res.status(500).send("Error getting config."); }
@@ -133,21 +137,28 @@ exports.getStats = onRequest({ secrets: [] }, (req, res) => {
       const { startDate, endDate } = req.query;
       if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required.' });
 
-      // [FIX] เปลี่ยนมาใช้ Chained method query
-      const q = db.collection('daily_stats')
-        .where(FieldPath.documentId(), '>=', startDate)
-        .where(FieldPath.documentId(), '<=', endDate);
+      const q = query(
+        collection(db, 'daily_stats'),
+        where(documentId(), '>=', startDate),
+        where(documentId(), '<=', endDate)
+      );
 
-      const snapshot = await q.get();
+      const snapshot = await getDocs(q);
       const aggregatedStats = {
         totalLineEvents: 0, totalGeminiHits: 0,
-        processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0, errors: 0 },
+        processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0, youtubeProcessing: 0, errors: 0 },
         dailyActivity: {}
       };
 
       snapshot.forEach(doc => {
         const data = doc.data();
-        aggregatedStats.dailyActivity[doc.id] = { lineOaEvents: data.lineOaEvents || 0, geminiApiHits: data.geminiApiHits || 0, };
+        const dateId = doc.id;
+        if (!aggregatedStats.dailyActivity[dateId]) {
+          aggregatedStats.dailyActivity[dateId] = { lineOaEvents: 0, geminiApiHits: 0 };
+        }
+        aggregatedStats.dailyActivity[dateId].lineOaEvents += data.lineOaEvents || 0;
+        aggregatedStats.dailyActivity[dateId].geminiApiHits += data.geminiApiHits || 0;
+
         aggregatedStats.totalLineEvents += data.lineOaEvents || 0;
         aggregatedStats.totalGeminiHits += data.geminiApiHits || 0;
         for (const key in aggregatedStats.processing) {
@@ -162,13 +173,13 @@ exports.getStats = onRequest({ secrets: [] }, (req, res) => {
   };
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
+
+
 exports.blockUser = onRequest({ secrets: [] }, (req, res) => {
   const handler = async (req, res) => {
     try {
       const { userId, isBlocked } = req.body;
-      if (!userId) {
-        return res.status(400).json({ error: 'userId is required.' });
-      }
+      if (!userId) return res.status(400).json({ error: 'userId is required.' });
       const statusRef = db.collection('users').doc(userId).collection('status').doc('block');
       await statusRef.set({ isBlocked: isBlocked, timestamp: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       res.status(200).json({ success: true, message: `User ${userId} status set to blocked: ${isBlocked}` });
@@ -180,28 +191,18 @@ exports.blockUser = onRequest({ secrets: [] }, (req, res) => {
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
 
+
 exports.sendBroadcast = onRequest({ secrets: [lineChannelAccessToken] }, (req, res) => {
   const handler = async (req, res) => {
     const { message } = req.body;
-    if (!message || message.trim() === '') {
-      return res.status(400).json({ error: 'Message cannot be empty.' });
-    }
+    if (!message || message.trim() === '') return res.status(400).json({ error: 'Message cannot be empty.' });
+
     const client = new Client({ channelAccessToken: lineChannelAccessToken.value() });
     try {
-      const usersSnapshot = await db.collection('users').get();
-      const userIds = usersSnapshot.docs.map(doc => doc.id);
-      if (userIds.length === 0) {
-        return res.status(404).json({ error: 'No users found.' });
-      }
-      const chunkSize = 150;
-      const broadcastPromises = [];
-      for (let i = 0; i < userIds.length; i += chunkSize) {
-        broadcastPromises.push(client.multicast(userIds.slice(i, i + chunkSize), [{ type: 'text', text: message }]));
-      }
-      await Promise.all(broadcastPromises);
-      res.status(200).json({ success: true, message: `Broadcast sent to ${userIds.length} users.` });
+      await client.broadcast([{ type: 'text', text: message }]);
+      res.status(200).json({ success: true, message: `Broadcast sent.` });
     } catch (error) {
-      console.error("Error sending broadcast:", error);
+      console.error("Error sending broadcast:", error.originalError.response.data);
       res.status(500).json({ error: 'Failed to send broadcast.' });
     }
   };
@@ -211,8 +212,8 @@ exports.sendBroadcast = onRequest({ secrets: [lineChannelAccessToken] }, (req, r
 exports.getErrors = onRequest({ secrets: [] }, (req, res) => {
   const handler = async (req, res) => {
     try {
-      const errorsQuery = db.collection('errors').orderBy('timestamp', 'desc').limit(20);
-      const snapshot = await errorsQuery.get();
+      const errorsQuery = query(collection(db, 'errors'), orderBy('timestamp', 'desc'), limit(50));
+      const snapshot = await getDocs(errorsQuery);
       const errors = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, timestamp: doc.data().timestamp.toDate().toISOString() }));
       res.status(200).json(errors);
     } catch (error) {
@@ -222,52 +223,14 @@ exports.getErrors = onRequest({ secrets: [] }, (req, res) => {
   };
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
-exports.adminReply = onRequest({ secrets: [lineChannelAccessToken] }, (req, res) => {
-  const handler = async (req, res) => {
-    const { userId, message } = req.body;
-    if (!userId || !message) {
-      return res.status(400).json({ error: 'userId and message are required.' });
-    }
 
-    const client = new Client({ channelAccessToken: lineChannelAccessToken.value() });
-
-    try {
-      // 1. ส่งข้อความ Push Message ไปหาผู้ใช้
-      // เราเติม [ADMIN] เข้าไปเพื่อให้ผู้ใช้รู้ว่าแอดมินเป็นคนตอบ
-      await client.pushMessage(userId, { type: 'text', text: `[ADMIN] ${message}` });
-
-      // 2. บันทึกข้อความของแอดมินลงในประวัติการสนทนา
-      const conversationRef = db.collection('conversations').doc(userId);
-      const doc = await conversationRef.get();
-      let conversations = (doc.exists && doc.data().messages) ? doc.data().messages : [];
-
-      conversations.push({
-        userMessage: '[Message from Admin]', // ใช้เป็นตัวแยกแยะว่าเป็นข้อความจากแอดมิน
-        aiResponse: message, // เนื้อหาข้อความจริง ๆ
-        timestamp: new Date().toISOString(),
-      });
-
-      if (conversations.length > 20) {
-        conversations = conversations.slice(-20);
-      }
-
-      await conversationRef.set({ messages: conversations, lastUpdated: new Date() }, { merge: true });
-
-      res.status(200).json({ success: true });
-
-    } catch (error) {
-      console.error("Admin reply error:", error);
-      res.status(500).json({ error: 'Failed to send admin reply.' });
-    }
-  };
-  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
-});
-
-exports.health = onRequest({ invoker: 'public', secrets: [] }, (req, res) => {
+exports.health = onRequest({ secrets: [] }, (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// ... All other helper functions like handleMessage, sendSafeResponse etc. ...
+// =================================================================
+//  ✅ Helper Functions
+// =================================================================
 async function handleMessage(event, client, langAI, loadingManager) {
   const { type: messageType, id: messageId } = event.message;
   const userId = event.source.userId;
@@ -285,7 +248,7 @@ async function handleMessage(event, client, langAI, loadingManager) {
     }
     await sendSafeResponse(event, client, response);
   } catch (error) {
-    await handleErrorWithFallback(event, client, userId, error);
+    await handleErrorWithFallback(event, client, userId, error, langAI);
   } finally {
     loadingManager.stopProcessing(userId);
   }
@@ -298,27 +261,35 @@ async function handlePostback(event, client, langAI, loadingManager) {
     const response = await langAI.processPostback(event.postback.data, userId, client);
     await sendSafeResponse(event, client, response);
   } catch (error) {
-    await handleErrorWithFallback(event, client, userId, error);
+    await handleErrorWithFallback(event, client, userId, error, langAI);
   } finally {
     loadingManager.stopProcessing(userId);
   }
 }
 
 async function sendSafeResponse(event, client, response) {
+  if (!response) {
+    console.error("Attempted to send an empty response.");
+    return;
+  }
+  const messages = (Array.isArray(response) ? response : [response]).map(validateAndCleanResponse);
   try {
-    if (event.replyToken && usedReplyTokens.has(event.replyToken)) {
-      await client.pushMessage(event.source.userId, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
-      return;
-    }
-    if (event.replyToken) {
+    if (event.replyToken && !usedReplyTokens.has(event.replyToken)) {
       usedReplyTokens.add(event.replyToken);
       setTimeout(() => usedReplyTokens.delete(event.replyToken), 2 * 60 * 1000);
+      await client.replyMessage(event.replyToken, messages);
+    } else {
+      await client.pushMessage(event.source.userId, messages);
     }
-    await client.replyMessage(event.replyToken, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
   } catch (error) {
-    if (error.response?.data?.message.includes('Invalid reply token')) {
-      await client.pushMessage(event.source.userId, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
+    console.error(`Failed to send message: ${error.message}`);
+    if (error.originalError?.response?.data) {
+      console.error("LINE API Error:", error.originalError.response.data);
     }
+    // Fallback to push message if reply fails for other reasons
+    await client.pushMessage(event.source.userId, messages).catch(pushError => {
+      console.error(`Fallback push message also failed: ${pushError.message}`);
+    });
   }
 }
 
@@ -329,12 +300,14 @@ function validateAndCleanResponse(response) {
   return response;
 }
 
-async function handleErrorWithFallback(event, client, userId, originalError) {
+async function handleErrorWithFallback(event, client, userId, originalError, langAI) {
   console.error('Original error:', originalError.message, originalError.stack);
+  if (langAI) await langAI.logError(originalError, { userId, event });
+
   try {
-    await sendSafeResponse(event, client, { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด' });
+    await sendSafeResponse(event, client, { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาดในการประมวลผล โปรดลองอีกครั้ง' });
   } catch (fallbackError) {
-    await client.pushMessage(userId, { type: 'text', text: '🔧 ขออภัยครับ เกิดข้อผิดพลาด' });
+    console.error('Fallback error message failed:', fallbackError.message);
   }
 }
 
@@ -347,14 +320,14 @@ async function handleWithPushMessage(event, client, langAI) {
     } else if (event.type === 'postback') {
       response = await langAI.processPostback(event.postback.data, userId, client);
     } else {
-      response = { type: 'text', text: '⏰ การประมวลผลใช้เวลานาน' };
+      response = { type: 'text', text: '⏰ การประมวลผลใช้เวลานานเกินไป กรุณาลองอีกครั้ง' };
     }
     await client.pushMessage(userId, Array.isArray(response) ? response.map(validateAndCleanResponse) : [validateAndCleanResponse(response)]);
   } catch (error) {
     console.error('💥 Push message error:', error.stack || error);
+    if (langAI) await langAI.logError(error, { location: 'handleWithPushMessage' });
   }
 }
-
 
 function streamToBuffer(stream) {
   return new Promise((resolve, reject) => {
