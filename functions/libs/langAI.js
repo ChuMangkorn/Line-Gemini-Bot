@@ -482,13 +482,16 @@ class LangAI {
     await this.logUsage('imageProcessing');
     await this.logUsage('geminiApiHits');
     try {
-      const result = await this.multimodal.analyzeImage(imageBuffer, userId);
+      const context = await this.getConversationContext(userId);
+      const imageAnalysisPrompt = `${this.getSystemPrompt()}\n\n## Conversation Context\n${context || 'This is the beginning of the conversation.'}\n\n## User's Request\nThe user has sent an image. Please analyze it carefully, describe what you see, and provide any relevant information or insights.`;
+      const result = await this.multimodal.analyzeImage(imageBuffer, userId, imageAnalysisPrompt);
       await this.saveFileContext(userId, 'image', 'User sent an image');
       await this.saveConversationContext(userId, '[User sent an image]', result);
-      return { type: 'text', text: `🖼️ **Image Analysis:**\n\n${result}` };
+      return { type: 'text', text: result };
     } catch (error) {
       console.error('Image processing error:', error);
-      return { type: 'text', text: `❌ Sorry, Leng could not analyze the image: ${error.message}` };
+      await this.logError(error, { userId, location: 'processImageMessage' });
+      return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถวิเคราะห์รูปภาพได้: ${error.message}` };
     }
   }
   async processAudioMessage(audioBuffer, userId, client) {
@@ -497,13 +500,16 @@ class LangAI {
     await this.logUsage('audioProcessing');
     await this.logUsage('geminiApiHits');
     try {
-      const result = await this.multimodal.analyzeAudio(audioBuffer, userId);
+      const context = await this.getConversationContext(userId);
+      const audioAnalysisPrompt = `${this.getSystemPrompt()}\n\n## Conversation Context\n${context || 'This is the beginning of the conversation.'}\n\n## User's Request\nThe user has sent an audio clip. Please transcribe it, analyze its content, and provide a summary or answer any questions within it.`;
+      const result = await this.multimodal.analyzeAudio(audioBuffer, userId, audioAnalysisPrompt);
       await this.saveFileContext(userId, 'audio', 'User sent an audio file');
       await this.saveConversationContext(userId, '[User sent an audio file]', result);
-      return { type: 'text', text: `🎵 **Audio Analysis:**\n\n${result}` };
+      return { type: 'text', text: result };
     } catch (error) {
       console.error('Audio processing error:', error);
-      return { type: 'text', text: `❌ Sorry, Leng could not process the audio: ${error.message}` };
+      await this.logError(error, { userId, location: 'processAudioMessage' });
+      return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถประมวลผลไฟล์เสียงได้: ${error.message}` };
     }
   }
   async processVideoMessage(videoBuffer, userId, client) {
@@ -512,13 +518,16 @@ class LangAI {
     await this.logUsage('videoProcessing');
     await this.logUsage('geminiApiHits');
     try {
-      const result = await this.multimodal.analyzeVideo(videoBuffer, userId);
+      const context = await this.getConversationContext(userId);
+      const videoAnalysisPrompt = `${this.getSystemPrompt()}\n\n## Conversation Context\n${context || 'This is the beginning of the conversation.'}\n\n## User's Request\nThe user has sent a video. Please analyze it frame by frame, describe the events, and summarize its content.`;
+      const result = await this.multimodal.analyzeVideo(videoBuffer, userId, videoAnalysisPrompt);
       await this.saveFileContext(userId, 'video', 'User sent a video');
       await this.saveConversationContext(userId, '[User sent a video]', result);
-      return { type: 'text', text: `🎬 **Video Analysis:**\n\n${result}` };
+      return { type: 'text', text: result };
     } catch (error) {
       console.error('Video processing error:', error);
-      return { type: 'text', text: `❌ Sorry, Leng could not analyze the video: ${error.message}` };
+      await this.logError(error, { userId, location: 'processVideoMessage' });
+      return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถวิเคราะห์วิดีโอได้: ${error.message}` };
     }
   }
   async processFileMessage(fileBuffer, fileName, userId, client) {
@@ -527,15 +536,19 @@ class LangAI {
     await this.logUsage('fileProcessing');
     await this.logUsage('geminiApiHits');
     try {
-      const result = await this.multimodal.analyzeDocument(fileBuffer, fileName, userId);
+      const context = await this.getConversationContext(userId);
+      const documentAnalysisPrompt = `${this.getSystemPrompt()}\n\n## Conversation Context\n${context || 'This is the beginning of the conversation.'}\n\n## User's Request\nThe user has sent a document named "${fileName}". Please read it, summarize the key points, and answer any questions based on its content.`;
+      const result = await this.multimodal.analyzeDocument(fileBuffer, fileName, userId, documentAnalysisPrompt);
       await this.saveFileContext(userId, 'document', `Document: ${fileName}`);
       await this.saveConversationContext(userId, `[User sent a file: ${fileName}]`, result);
-      return { type: 'text', text: `📄 **Summary from "<span class="math-inline">\{fileName\}"\:\*\*\\n\\n</span>{result}` };
+      return { type: 'text', text: result };
     } catch (error) {
       console.error('File processing error:', error);
-      return { type: 'text', text: `❌ Sorry, Leng could not read the document "${fileName}": ${error.message}` };
+      await this.logError(error, { userId, fileName, location: 'processFileMessage' });
+      return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถอ่านเอกสาร "${fileName}" ได้: ${error.message}` };
     }
   }
+
   async processLocationMessage(lat, lon, address, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
