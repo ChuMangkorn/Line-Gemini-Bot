@@ -1,6 +1,6 @@
-const admin = require('firebase-admin');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { defineSecret } = require('firebase-functions/params');
+const admin = require('firebase-admin');
 const moment = require('moment-timezone');
 const WeatherService = require('./weatherService');
 const MultimodalProcessor = require('./multimodal');
@@ -8,29 +8,37 @@ const { YoutubeTranscript } = require('youtube-transcript');
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const YouTubeService = require('./youtubeService');
 
-
 class LangAI {
   constructor(adminId, youtubeApiKey) {
     console.log('🤖 เล้ง AI initializing...');
-
-    // [FIX] กำหนด tools ให้กับ instance ของคลาสด้วย 'this.tools'
-    this.tools = [{
-      functionDeclarations: [
-        {
-          name: 'Youtube',
-          description: 'Searches YouTube for videos based on a user\'s query and returns a list of relevant videos.',
-          parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'The search term for the YouTube video.' } }, required: ['query'] }
-        }
-      ]
-    }];
+    const tools = [
+      {
+        functionDeclarations: [
+          {
+            name: 'Youtube',
+            description: 'Searches YouTube for videos based on a user\'s query and returns a list of relevant videos.',
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                query: {
+                  type: 'STRING',
+                  description: 'The search term for the YouTube video.'
+                }
+              },
+              required: ['query']
+            }
+          }
+        ]
+      }
+    ];
 
     try {
       this.genAI = new GoogleGenerativeAI(geminiApiKey.value());
-      // [FIX 2] ไม่ต้องสร้าง this.model ที่นี่แล้ว เราจะไปสร้างในแต่ละฟังก์ชันที่เรียกใช้แทน
-      console.log('✅ Gemini API Initialized');
+      this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash', tools: tools });
+      console.log('✅ Gemini API connected successfully');
     } catch (error) {
       console.error('❌ Gemini API connection failed:', error);
-      this.genAI = null;
+      this.model = null;
     }
 
     this.db = admin.firestore();
@@ -42,26 +50,37 @@ class LangAI {
     this.getSystemPrompt = () => {
       const currentTime = moment().tz('Asia/Tokyo').format('YYYY-MM-DD HH:mm:ss JST');
       const currentDate = moment().tz('Asia/Tokyo').format('dddd, MMMM Do YYYY');
+
       return `You are "Leng," a brilliant, multilingual AI assistant in LINE. Your name is "เล้ง".
-        CRITICAL RULE: Language Protocol
-        - You MUST ALWAYS respond in the same language as the user's last message.
-        Core Persona & Principles
-        - **Expert & Trustworthy:** Act as a polite, intelligent, and reliable expert.
-        - **Accurate & Factual:** Provide fact-based information.
-        - **Structured & Clear:** Format answers for readability using Markdown.
-        - **Proactive & Helpful:** Anticipate user needs. Suggest relevant follow-up questions.
-        Capabilities & Knowledge
-        - **Current Date & Time:** ${currentDate}, ${currentTime} (JST).
-        - **Contextual Memory:** You can recall previous messages in the current conversation.
-        - **Multimodal Analysis:** Expert at analyzing text, images, audio, video, and documents.
-        - **Youtube:** You can search for YouTube videos.
-        - **Weather Forecasting:** You can provide detailed weather forecasts.
-        - **General Knowledge:** You can answer a wide range of questions.`;
+
+      CRITICAL RULE: Language Protocol
+      - You MUST ALWAYS respond in the same language as the user's last message.
+      - Example 1: User says "Hello" -> You respond in English.
+      - Example 2: User says "こんにちは" -> You respond in Japanese.
+      - Example 3: User says "สบายดีไหม" -> You respond in Thai.
+      - This is your highest priority rule. Do not break it.
+      
+      Core Persona & Principles
+      - **Expert & Trustworthy:** Act as a polite, intelligent, and reliable expert.
+      - **Accurate & Factual:** Provide fact-based information. If uncertain, state your limitations.
+      - **Structured & Clear:** Format answers for readability using Markdown (headings, lists, bolding).
+      - **Proactive & Helpful:** Anticipate user needs. Suggest relevant follow-up questions or additional information after answering.
+      - **Purposeful Emojis:** Use emojis like ✅, 💡, ⚠️ to enhance meaning, not for decoration.
+      
+      Capabilities & Knowledge
+      - **Current Date & Time:** ${currentDate}, ${currentTime} (JST).
+      - **Contextual Memory:** You can recall previous messages and files in the current conversation to provide seamless and intelligent responses.
+      - **Multimodal Analysis:** You are an expert at analyzing and answering questions about text, images, audio, video, and documents.
+      - **Youtube:** You can search for YouTube videos when a user asks for a clip or video on a certain topic.
+      - **Weather Forecasting:** You can provide detailed, accurate weather forecasts using the One Call API 3.0.
+      - **General Knowledge:** You can answer a wide range of questions on various topics.`;
     };
     console.log('✅ เล้ง AI ready!');
   }
 
-  // ... All helper functions like logUsage, logError, generateAdminReport, etc. remain the same ...
+  // =================================================================
+  //  ✨ Reporting & Usage Logging
+  // =================================================================
   async logUsage(statType, count = 1) {
     const today = moment().tz('Asia/Bangkok').format('YYYY-MM-DD');
     const statRef = this.db.collection('daily_stats').doc(today);
@@ -92,10 +111,10 @@ class LangAI {
   }
 
   async generateAdminReport() {
-    // This function is correct and does not need changes.
     const today = moment().tz('Asia/Bangkok').format('YYYY-MM-DD');
     const statDoc = await this.db.collection('daily_stats').doc(today).get();
     const stats = statDoc.exists ? statDoc.data() : {};
+
     const conversationsQuery = this.db.collection('conversations').orderBy('lastUpdated', 'desc').limit(3);
     const conversationsSnapshot = await conversationsQuery.get();
     const recentConversations = [];
@@ -111,6 +130,7 @@ class LangAI {
         });
       }
     });
+
     const createStatRow = (label, value, icon) => ({
       type: 'box', layout: 'horizontal', margin: 'md',
       contents: [
@@ -119,14 +139,16 @@ class LangAI {
         { type: 'text', text: `${value || 0}`, size: 'sm', color: '#FFFFFF', align: 'end', weight: 'bold' }
       ]
     });
+
     const createConversationRow = (convo) => ({
       type: 'box', layout: 'vertical', margin: 'lg', spacing: 'sm',
       contents: [
-        { type: 'text', text: `👤 <span class="math-inline">\{convo\.user\} \(</span>{convo.time})`, color: '#AEB8C1', size: 'xs' },
+        { type: 'text', text: `👤 ${convo.user} (${convo.time})`, color: '#AEB8C1', size: 'xs' },
         { type: 'text', text: `> ${convo.userMsg}`, style: 'italic', color: '#FFFFFF', size: 'sm' },
         { type: 'text', text: `< ${convo.aiMsg}`, style: 'italic', color: '#D3D3D3', size: 'sm' },
       ]
     });
+
     return {
       type: 'flex',
       altText: `รายงานสรุปการใช้งานวันที่ ${today}`,
@@ -180,43 +202,35 @@ class LangAI {
     };
   }
 
+  // =================================================================
+  //  ✅ State, Context & Profile Management
+  // =================================================================
   async updateUserProfile(userId, client) {
-    const userDocRef = this.db.collection('users').doc(userId);
-    const profileRef = userDocRef.collection('profile').doc('info');
+    const userRef = this.db.collection('users').doc(userId).collection('profile').doc('info');
+    const doc = await userRef.get();
 
-    try {
-      // พยายามดึงข้อมูลโปรไฟล์จาก LINE
-      const profile = await client.getProfile(userId);
-      console.log(`Successfully fetched profile for user: ${profile.displayName}`);
-
-      // บันทึกข้อมูลโปรไฟล์ที่ได้มาลงทั้งเอกสารหลักและ subcollection
-      const profileData = {
-        displayName: profile.displayName,
-        pictureUrl: profile.pictureUrl,
-        lastSeen: admin.firestore.FieldValue.serverTimestamp()
-      };
-
-      await userDocRef.set(profileData, { merge: true });
-      await profileRef.set({
-        ...profileData,
-        statusMessage: profile.statusMessage,
-        lastFetched: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-
-    } catch (error) {
-      // กรณีดึงโปรไฟล์จาก LINE ไม่สำเร็จ
-      console.error(`Failed to get profile for user ${userId}, creating fallback. Error: ${error.message}`);
-
-      // ให้สร้าง/อัปเดตข้อมูลพื้นฐานในเอกสารหลัก เพื่อให้ Broadcast หากเจอ
-      const fallbackData = {
-        displayName: `User (${userId.slice(-6)})`,
-        pictureUrl: '',
-        lastSeen: admin.firestore.FieldValue.serverTimestamp()
-      };
-      await userDocRef.set(fallbackData, { merge: true });
+    if (!doc.exists || moment().diff(moment(doc.data().lastFetched?.toDate()), 'hours') > 24) {
+      try {
+        const profile = await client.getProfile(userId);
+        await userRef.set({
+          displayName: profile.displayName,
+          pictureUrl: profile.pictureUrl,
+          statusMessage: profile.statusMessage,
+          lastFetched: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        console.log(`Updated profile for user: ${profile.displayName}`);
+      } catch (error) {
+        console.error(`Failed to get profile for user ${userId}:`, error.message);
+        if (!doc.exists) {
+          await userRef.set({
+            displayName: `User (${userId.slice(-6)})`,
+            pictureUrl: '',
+            lastFetched: admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
+      }
     }
   }
-
 
   async setContextState(userId, stateData) {
     try {
@@ -253,56 +267,9 @@ class LangAI {
     }
   }
 
-  async getConversationHistory(userId) {
-    const conversationRef = this.db.collection('conversations').doc(userId);
-    const doc = await conversationRef.get();
-    if (!doc.exists || !doc.data().messages) {
-      return [];
-    }
-    const messages = doc.data().messages.slice(-10);
-    const history = [];
-    messages.forEach(conv => {
-      if (conv.userMessage) {
-        history.push({ role: "user", parts: [{ text: conv.userMessage }] });
-      }
-      if (conv.aiResponse) {
-        history.push({ role: "model", parts: [{ text: conv.aiResponse }] });
-      }
-    });
-    return history;
-  }
-
-  async handleWeatherQuery(message, userId) {
-    const lowerMessage = message.toLowerCase();
-    const contextState = await this.getContextState(userId);
-
-    if (this.isContextualWeatherQuery(lowerMessage) && contextState.lastMentionedCity) {
-      const fullQuery = `${message} ${contextState.lastMentionedCity}`;
-      if (lowerMessage.includes('รายสัปดาห์') || lowerMessage.includes('weekly')) return this.weatherService.getWeeklyForecast(fullQuery);
-      if (lowerMessage.includes('รายชั่วโมง') || lowerMessage.includes('hourly')) return this.weatherService.getHourlyForecast(fullQuery);
-      const tomorrow = moment().add(1, 'day').format('YYYY-MM-DD');
-      return this.weatherService.getDailyDetailForecast(`daily_detail_${tomorrow}_${contextState.lastMentionedCity}`);
-    }
-
-    const queryType = this.detectQueryType(message);
-    let city;
-    switch (queryType) {
-      case 'current_weather_no_city':
-        await this.setContextState(userId, { pendingAction: 'request_city_for_weather' });
-        return { type: 'text', text: 'คุณต้องการทราบสภาพอากาศของเมืองอะไรครับ?' };
-      case 'current_weather':
-      case 'weekly_weather':
-      case 'hourly_weather':
-        city = this.weatherService.extractCityFromQuery(message);
-        await this.setContextState(userId, { lastMentionedCity: city.name });
-        if (queryType === 'weekly_weather') return this.weatherService.getWeeklyForecast(message);
-        if (queryType === 'hourly_weather') return this.weatherService.getHourlyForecast(message);
-        return this.weatherService.getCurrentWeather(message);
-      default:
-        return null;
-    }
-  }
-
+  // =================================================================
+  //  ✅ Main Processing Logic
+  // =================================================================
   async processTextMessage(message, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -311,35 +278,64 @@ class LangAI {
       return this.generateAdminReport();
     }
 
-    const urlRegex = /(https?:\/\/(?:www\.)?youtube\.com\/watch\?v=[\w-]+|https?:\/\/youtu\.be\/[\w-]+)/g;
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
     const urls = message.match(urlRegex);
     if (urls && urls[0]) {
-      return this.processYouTubeLink(urls[0], userId);
+      const url = urls[0];
+      const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/;
+      if (youtubeRegex.test(url)) {
+        return this.processYouTubeLink(url, userId);
+      } else {
+        const responseText = `✅ เล้งเห็นลิงก์ที่คุณส่งมาแล้วครับ: ${url}\n\nตอนนี้เล้งยังไม่สามารถเข้าถึงเนื้อหาจากเว็บไซต์ทั่วไปได้โดยตรง แต่สำหรับลิงก์ YouTube เล้งสามารถสรุปให้ได้นะครับ!`;
+        await this.saveConversationContext(userId, `[User sent a link: ${url}]`, responseText);
+        return { type: 'text', text: responseText };
+      }
     }
 
     await this.logUsage('textProcessing');
+    const contextState = await this.getContextState(userId);
+    const lowerMessage = message.toLowerCase();
 
     try {
-      const contextState = await this.getContextState(userId);
       if (contextState.pendingAction === 'request_city_for_weather') {
-        await this.clearContextState(userId);
         const cityData = this.weatherService.extractCityFromQuery(message);
         if (cityData) {
+          await this.setContextState(userId, { pendingAction: null, lastMentionedCity: cityData.name });
           return this.weatherService.getCurrentWeather(message);
         }
+        await this.clearContextState(userId);
       }
 
-      const weatherResponse = await this.handleWeatherQuery(message, userId);
-      if (weatherResponse) {
-        return weatherResponse;
+      if (this.isContextualWeatherQuery(lowerMessage) && contextState.lastMentionedCity) {
+        const fullQuery = `${message} ${contextState.lastMentionedCity}`;
+        if (lowerMessage.includes('รายสัปดาห์') || lowerMessage.includes('weekly')) return this.weatherService.getWeeklyForecast(fullQuery);
+        if (lowerMessage.includes('รายชั่วโมง') || lowerMessage.includes('hourly')) return this.weatherService.getHourlyForecast(fullQuery);
+        const tomorrow = moment().add(1, 'day').format('YYYY-MM-DD');
+        return this.weatherService.getDailyDetailForecast(`daily_detail_${tomorrow}_${contextState.lastMentionedCity}`);
       }
 
-      if (this.isTimeQuery(message)) {
-        return this.createProfessionalTimeMessage();
+      const queryType = this.detectQueryType(message);
+      let city;
+      switch (queryType) {
+        case 'current_weather_no_city':
+          await this.setContextState(userId, { pendingAction: 'request_city_for_weather' });
+          return { type: 'text', text: 'คุณต้องการทราบสภาพอากาศของเมืองอะไรครับ? (Which city would you like to know the weather for? / どの都市の天気が知りたいですか？)' };
+        case 'current_weather':
+        case 'weekly_weather':
+        case 'hourly_weather':
+          city = this.weatherService.extractCityFromQuery(message);
+          await this.setContextState(userId, { lastMentionedCity: city.name });
+          const weatherMethod = {
+            'current_weather': this.weatherService.getCurrentWeather,
+            'weekly_weather': this.weatherService.getWeeklyForecast,
+            'hourly_weather': this.weatherService.getHourlyForecast
+          }[queryType].bind(this.weatherService);
+          return weatherMethod(message);
+        case 'time_query':
+          return this.createProfessionalTimeMessage();
+        default:
+          return this.processGeneralQuery(message, userId);
       }
-
-      return this.processGeneralQuery(message, userId);
-
     } catch (error) {
       console.error('Text processing error:', error.stack || error);
       await this.logError(error, { userId, message, location: 'processTextMessage' });
@@ -347,62 +343,37 @@ class LangAI {
     }
   }
 
-  // [REFACTORED] Switched back to a more stable, stateless two-call pattern for tool use.
   async processGeneralQuery(message, userId) {
-    if (!this.genAI) {
-      return { type: 'text', text: '❌ ขออภัยครับ ขณะนี้ระบบ AI ขัดข้องชั่วคราว' };
-    }
-
     try {
-      const history = await this.getConversationHistory(userId);
-      const model = this.genAI.getGenerativeModel({
-        model: "gemini-2.0-flash",
-        tools: this.tools,
-        systemInstruction: this.getSystemPrompt(),
-      });
+      const context = await this.getConversationContext(userId);
+      const prompt = `${this.getSystemPrompt()}\n\n## Conversation Context\n${context || 'No previous conversation.'}\n\n## User's Query\n${message}`;
 
       await this.logUsage('geminiApiHits');
-
-      // Build the request with history
-      const contents = [...history, { role: 'user', parts: [{ text: message }] }];
-      const result = await model.generateContent({ contents });
-
+      const result = await this.model.generateContent(prompt);
       const response = result.response;
-      if (!response) {
-        throw new Error("Received no response from Gemini API.");
-      }
-
       const functionCalls = response.functionCalls();
 
       if (functionCalls && functionCalls.length > 0) {
-        const call = functionCalls[0];
-        console.log(`🤖 Gemini wants to call a tool: ${call.name}`);
-
-        if (call.name === 'Youtube') {
-          await this.logUsage('youtubeProcessing');
-          const { query } = call.args;
+        if (functionCalls[0].name === 'Youtube') {
+          const { query } = functionCalls[0].args;
           const searchResults = await this.youtubeService.search(query);
-
-          // Send the function response back to the model
-          const result2 = await model.generateContent({
+          const result2 = await this.model.generateContent({
             contents: [
-              ...contents, // Send original history and user message again
-              { role: 'model', parts: [{ functionCall: call }] }, // Include the model's first turn
-              { // Add the function response
+              { role: 'user', parts: [{ text: prompt }] },
+              { role: 'model', parts: [{ functionCall: functionCalls[0] }] },
+              {
                 role: 'function',
                 parts: [{
                   functionResponse: {
                     name: 'Youtube',
-                    response: { results: searchResults },
-                  },
-                }],
-              },
-            ],
+                    response: { results: searchResults }
+                  }
+                }]
+              }
+            ]
           });
-
           const finalText = result2.response.text();
           await this.saveConversationContext(userId, message, finalText);
-
           if (searchResults && searchResults.length > 0) {
             return this.createYouTubeCarousel(finalText, searchResults);
           }
@@ -410,51 +381,17 @@ class LangAI {
         }
       }
 
-      const text = response.text();
-      if (text) {
-        await this.saveConversationContext(userId, message, text);
-        return { type: 'text', text: text };
-      }
-
-      throw new Error("Gemini response was empty or unhandled.");
+      const textResponse = response.text();
+      await this.saveConversationContext(userId, message, textResponse);
+      return { type: 'text', text: textResponse };
 
     } catch (error) {
       console.error('General query processing error:', error);
       await this.logError(error, { userId, message, location: 'processGeneralQuery' });
-      return { type: 'text', text: '❌ ขออภัยครับ เล้งพบปัญหาในการประมวลผล กรุณาลองใหม่อีกครั้ง' };
+      return { type: 'text', text: '❌ ขออภัยค่ะ เล้งไม่สามารถประมวลผลข้อความได้' };
     }
   }
 
-  // ... rest of the file (createYouTubeCarousel, processPostback, etc.) is correct and does not need changes ...
-  createYouTubeCarousel(introText, videos) {
-    const bubbles = videos.slice(0, 8).map(video => ({
-      type: 'bubble',
-      size: 'kilo',
-      styles: { footer: { separator: true } },
-      hero: { type: 'image', url: video.thumbnail, size: 'full', aspectRatio: '16:9', aspectMode: 'cover', action: { type: 'uri', label: 'Play Video', uri: video.url } },
-      body: {
-        type: 'box', layout: 'vertical', paddingAll: '12px', spacing: 'md',
-        contents: [
-          { type: 'text', text: video.title, weight: 'bold', size: 'md', wrap: true, maxLines: 2, color: '#FFFFFF' },
-          {
-            type: 'box', layout: 'baseline', spacing: 'sm', margin: 'md',
-            contents: [
-              { type: 'icon', url: 'https://i.imgur.com/bA15iIz.png', size: 'sm' },
-              { type: 'text', text: video.channelTitle, color: '#d1d5db', size: 'sm', maxLines: 1, flex: 5 }
-            ]
-          },
-          { type: 'text', text: video.description || 'No description available.', wrap: true, size: 'xs', color: '#9ca3af', maxLines: 3, margin: 'md' }
-        ]
-      },
-      footer: {
-        type: 'box', layout: 'vertical',
-        contents: [
-          { type: 'button', action: { type: 'uri', label: 'ดูวิดีโอ (Watch)', uri: video.url }, style: 'primary', color: '#ff0000', height: 'sm', margin: 'none' }
-        ]
-      }
-    }));
-    return [{ type: 'text', text: introText }, { type: 'flex', altText: 'ผลการค้นหาวิดีโอจาก YouTube', contents: { type: 'carousel', contents: bubbles } }];
-  }
   async processPostback(data, userId) {
     await this.logUsage('lineOaEvents');
     try {
@@ -463,19 +400,22 @@ class LangAI {
       const cityPayload = parts.slice(parts.length > 2 ? 2 : 1).join('_');
       const city = this.weatherService.extractCityFromQuery(cityPayload);
       if (city) await this.setContextState(userId, { lastMentionedCity: city.name });
+
       if (data.startsWith('weekly_forecast_')) return this.weatherService.getWeeklyForecast(data);
       if (data.startsWith('hourly_forecast_')) return this.weatherService.getHourlyForecast(data);
       if (data.startsWith('daily_detail_')) return this.weatherService.getDailyDetailForecast(data);
-      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: this.getSystemPrompt() });
-      const prompt = `User pressed a button with data: "${data}". Respond accordingly.`;
+
+      const prompt = `${this.getSystemPrompt()}\n\nUser pressed a button with data: "${data}". Respond accordingly.`;
       await this.logUsage('geminiApiHits');
-      const result = await model.generateContent(prompt);
+      const result = await this.model.generateContent(prompt);
       return { type: 'text', text: result.response.text() };
     } catch (error) {
       console.error('Postback processing error:', error);
+      await this.logError(error, { userId, data, location: 'processPostback' });
       return { type: 'text', text: '❌ ขออภัยค่ะ ไม่สามารถประมวลผลการเลือกได้' };
     }
   }
+
   async processImageMessage(imageBuffer, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -494,6 +434,7 @@ class LangAI {
       return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถวิเคราะห์รูปภาพได้: ${error.message}` };
     }
   }
+
   async processAudioMessage(audioBuffer, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -512,6 +453,7 @@ class LangAI {
       return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถประมวลผลไฟล์เสียงได้: ${error.message}` };
     }
   }
+
   async processVideoMessage(videoBuffer, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -530,6 +472,7 @@ class LangAI {
       return { type: 'text', text: `❌ ขออภัยครับ เล้งไม่สามารถวิเคราะห์วิดีโอได้: ${error.message}` };
     }
   }
+
   async processFileMessage(fileBuffer, fileName, userId, client) {
     await this.logUsage('lineOaEvents');
     await this.updateUserProfile(userId, client);
@@ -557,23 +500,28 @@ class LangAI {
       const city = { lat, lon, name: address || 'Specified Location', timezone: 'Asia/Bangkok' };
       const weatherData = await this.weatherService.fetchOneCallApiData(lat, lon);
       const weatherResponse = this.weatherService.formatCurrentWeather(weatherData, city);
-      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: this.getSystemPrompt() });
-      const prompt = `User sent a location: ${city.name}\n\nProvide helpful information about this location.`;
+      const prompt = `${this.getSystemPrompt()}\n\nUser sent a location: ${city.name}\n\nProvide helpful information about this location.`;
       await this.logUsage('geminiApiHits');
-      const result = await model.generateContent(prompt);
+      const result = await this.model.generateContent(prompt);
       const responseText = result.response.text();
       await this.saveConversationContext(userId, `[User sent a location: ${city.name}]`, responseText);
       return [{ type: 'text', text: `📍 **About Your Location:**\n\n${responseText}` }, weatherResponse];
     } catch (error) {
       console.error('Location processing error:', error);
+      await this.logError(error, { userId, location: 'processLocationMessage' });
       return { type: 'text', text: '❌ Sorry, could not process the location.' };
     }
   }
+
+  // =================================================================
+  //  ✅ Helper & Utility Functions
+  // =================================================================
   isContextualWeatherQuery(message) {
     const contextualKeywords = ['พรุ่งนี้', 'มะรืน', 'รายสัปดาห์', 'รายชั่วโมง', 'แล้วพรุ่งนี้', 'แล้วอันนี้', 'แล้ว...', 'tomorrow', 'weekly', 'hourly'];
     const lowerMessage = message.toLowerCase();
     return contextualKeywords.some(keyword => lowerMessage.includes(keyword));
   }
+
   detectQueryType(message) {
     const lowerMessage = message.toLowerCase();
     if (this.isWeatherQuery(message)) {
@@ -587,14 +535,17 @@ class LangAI {
     if (this.isTimeQuery(message)) return 'time_query';
     return 'general';
   }
+
   isWeatherQuery(message) {
     const weatherKeywords = ['อากาศ', 'สภาพอากาศ', 'ฝน', 'แดด', 'หนาว', 'ร้อน', 'เมฆ', 'ลม', 'อุณหภูมิ', 'พยากรณ์', 'weather', 'forecast', '天気'];
     return weatherKeywords.some(keyword => message.toLowerCase().includes(keyword));
   }
+
   isTimeQuery(message) {
     const timeKeywords = ['เวลา', 'วันที่', 'กี่โมง', 'ตอนนี้', 'time', 'date', '時間', '日付'];
     return timeKeywords.some(keyword => message.toLowerCase().includes(keyword));
   }
+
   createProfessionalTimeMessage() {
     const jstTime = moment().tz('Asia/Tokyo');
     const thaiTime = moment().tz('Asia/Bangkok');
@@ -655,35 +606,118 @@ class LangAI {
       }
     };
   }
+
+  createYouTubeCarousel(introText, videos) {
+    const bubbles = videos.slice(0, 5).map(video => ({
+      type: 'bubble',
+      size: 'kilo',
+      hero: {
+        type: 'image',
+        url: video.thumbnail,
+        size: 'full',
+        aspectRatio: '16:9',
+        aspectMode: 'cover',
+        action: { type: 'uri', label: 'Play', uri: video.url }
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'text',
+            text: video.title,
+            weight: 'bold',
+            size: 'sm',
+            wrap: true,
+            maxLines: 2
+          },
+          {
+            type: 'box',
+            layout: 'baseline',
+            margin: 'md',
+            contents: [
+              { type: 'icon', url: 'https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/youtube_icon.png?alt=media&token=c29e6188-f5da-48b4-9c59-d8e78e475e7d', size: 'xs' },
+              { type: 'text', text: video.channelTitle, size: 'xs', color: '#8c8c8c', margin: 'sm', maxLines: 1 }
+            ]
+          }
+        ],
+        spacing: 'sm',
+        paddingAll: '12px'
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [{
+          type: 'button',
+          action: { type: 'uri', label: 'ดูวิดีโอ', uri: video.url },
+          style: 'primary',
+          color: '#FF0000',
+          height: 'sm'
+        }]
+      }
+    }));
+
+    return [
+      { type: 'text', text: introText },
+      {
+        type: 'flex',
+        altText: 'ผลการค้นหาวิดีโอจาก YouTube',
+        contents: { type: 'carousel', contents: bubbles }
+      }
+    ];
+  }
+
   async saveConversationContext(userId, userMessage, aiResponse) {
     try {
       const conversationRef = this.db.collection('conversations').doc(userId);
       const doc = await conversationRef.get();
       let conversations = (doc.exists && doc.data().messages) ? doc.data().messages : [];
       const timestamp = new Date().toISOString();
+
       let readableAiResponse;
       if (typeof aiResponse === 'object' && aiResponse.type === 'flex') {
         readableAiResponse = aiResponse.altText || '[Flex Message]';
-      } else if (Array.isArray(aiResponse)) {
-        readableAiResponse = aiResponse.map(r => (typeof r === 'object' && r.altText) ? r.altText : '[Complex Response]').join(', ');
+      } else if (Array.isArray(aiResponse) && aiResponse.length > 0) {
+        readableAiResponse = aiResponse.map(r => r.altText || r.text || '[Flex Message]').join(', ');
       } else if (typeof aiResponse === 'object') {
-        readableAiResponse = '[Object Response]';
+        readableAiResponse = aiResponse.text || '[Object Response]';
       } else {
         readableAiResponse = aiResponse;
       }
+
       conversations.push({
         userMessage: userMessage,
         aiResponse: readableAiResponse,
         timestamp: timestamp,
       });
+
       if (conversations.length > 20) {
         conversations = conversations.slice(-20);
       }
+
       await conversationRef.set({ messages: conversations, lastUpdated: new Date() }, { merge: true });
     } catch (error) {
       console.error('Error saving conversation context:', error);
     }
   }
+
+  async getConversationContext(userId) {
+    try {
+      const conversationRef = this.db.collection('conversations').doc(userId);
+      const doc = await conversationRef.get();
+      if (doc.exists && doc.data().messages) {
+        return doc.data().messages
+          .slice(-5)
+          .map(conv => `- User: ${conv.userMessage}\n- Leng: ${conv.aiResponse}`)
+          .join('\n\n');
+      }
+      return null;
+    } catch (error) {
+      console.error('Error getting conversation context:', error);
+      return null;
+    }
+  }
+
   async saveFileContext(userId, fileType, description) {
     try {
       const fileRef = this.db.collection('file_contexts').doc(userId);
@@ -696,10 +730,12 @@ class LangAI {
       console.error('Error saving file context:', error);
     }
   }
+
   async getFileContext(userId) {
     try {
       const fileRef = this.db.collection('file_contexts').doc(userId);
       const doc = await fileRef.get();
+
       if (doc.exists) {
         const data = doc.data();
         const fileTime = moment(data.timestamp.toDate());
@@ -713,32 +749,32 @@ class LangAI {
       return null;
     }
   }
+
   async processYouTubeLink(url, userId) {
     try {
       console.log(`Processing YouTube link: ${url}`);
       await this.logUsage('youtubeProcessing');
       await this.logUsage('geminiApiHits');
-      const transcript = await YoutubeTranscript.fetchTranscript(url, { lang: 'en' });
-      const transcriptText = transcript.map(t => t.text).join(' ');
-      if (!transcriptText) {
-        return { type: 'text', text: '✅ เล้งเห็นลิงก์ YouTube แล้ว แต่ไม่พบบทบรรยายในวิดีโอนี้ครับ เลยสรุปให้ไม่ได้' };
+
+      const transcript = await YoutubeTranscript.fetchTranscript(url, { lang: 'en' }).catch(() => []);
+
+      let prompt;
+      const systemPrompt = this.getSystemPrompt();
+
+      if (transcript.length > 0) {
+        const transcriptText = transcript.map(t => t.text).join(' ');
+        prompt = `${systemPrompt}\n\n## Task: Summarize YouTube Video\n- You are given a transcript from a YouTube video.\n- Your task is to summarize the key points of the video in clear, easy-to-read bullet points.\n- Respond in the user's language (assume Thai unless context suggests otherwise).\n- Start with a confirmation like "✅ เล้งสรุปวิดีโอมาให้แล้วครับ:"\n- Keep it concise and informative.\n\n## Video Transcript\n${transcriptText.substring(0, 15000)}\n\n## User's Request\nSummarize this video.`;
+      } else {
+        prompt = `${systemPrompt}\n\n## Task: Acknowledge YouTube Link\n- The user has sent a YouTube link for which a transcript could not be found.\n- Inform the user politely that you see the link but cannot summarize it because there's no transcript available.\n- Respond in the user's language.\n\n## User's Request\nSummarize this video: ${url}`;
       }
-      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: this.getSystemPrompt() });
-      const prompt = `## Task: Summarize YouTube Video
-      - You are given a transcript from a YouTube video.
-      - Your task is to summarize the key points of the video in clear, easy-to-read bullet points.
-      - Respond in the user's language (assume Thai unless context suggests otherwise).
-      - Start with a confirmation like "✅ เล้งสรุปวิดีโอมาให้แล้วครับ:"
-      - Keep it concise and informative.
-      ## Video Transcript
-      ${transcriptText.substring(0, 15000)}
-      ## User's Request
-      Summarize this video.`;
-      const result = await model.generateContent(prompt);
+
+      const result = await this.model.generateContent(prompt);
       const summary = result.response.text();
+      await this.saveConversationContext(userId, `[User sent YouTube link: ${url}]`, summary);
+
       const flexMessage = {
         type: 'flex',
-        altText: 'สรุปเนื้อหาวิดีโอจาก YouTube',
+        altText: 'เกี่ยวกับวิดีโอ YouTube',
         contents: {
           type: 'bubble',
           hero: {
@@ -753,61 +789,29 @@ class LangAI {
             layout: 'vertical',
             spacing: 'md',
             contents: [
-              { type: 'text', text: 'สรุปวิดีโอ YouTube', weight: 'bold', size: 'xl' },
+              { type: 'text', text: 'วิดีโอจาก YouTube', weight: 'bold', size: 'xl' },
               {
                 type: 'box', layout: 'vertical', margin: 'lg', spacing: 'sm',
-                contents: [
-                  {
-                    type: 'box', layout: 'baseline', spacing: 'sm',
-                    contents: [
-                      { type: 'text', text: summary, wrap: true, color: '#666666', size: 'sm', flex: 5 }
-                    ]
-                  }
-                ]
+                contents: [{
+                  type: 'box', layout: 'baseline', spacing: 'sm',
+                  contents: [{ type: 'text', text: summary, wrap: true, color: '#666666', size: 'sm', flex: 5 }]
+                }]
               }
             ]
           },
           footer: {
             type: 'box', layout: 'vertical', spacing: 'sm',
-            contents: [
-              {
-                type: 'button', style: 'link', height: 'sm',
-                action: { type: 'uri', label: 'เปิดวิดีโอ', uri: url }
-              }
-            ]
+            contents: [{ type: 'button', style: 'link', height: 'sm', action: { type: 'uri', label: 'เปิดวิดีโอ', uri: url } }]
           }
         }
       };
-      await this.saveConversationContext(userId, `[User sent YouTube link: ${url}]`, summary);
+
       return flexMessage;
+
     } catch (error) {
       console.error('YouTube processing error:', error);
       await this.logError(error, { userId, url, location: 'processYouTubeLink' });
-      const errorMessage = {
-        type: 'flex',
-        altText: 'ไม่สามารถประมวลผลวิดีโอได้',
-        contents: {
-          type: 'bubble',
-          body: {
-            type: 'box',
-            layout: 'vertical',
-            contents: [
-              { type: 'text', text: 'เกิดข้อผิดพลาด', weight: 'bold', size: 'lg', color: '#FF0000' },
-              { type: 'text', text: 'ขออภัยครับ เล้งไม่สามารถสรุปเนื้อหาจากวิดีโอนี้ได้ อาจเป็นเพราะวิดีโอไม่มีบทบรรยายหรือเป็นวิดีโอส่วนตัวครับ', wrap: true, margin: 'md' }
-            ]
-          },
-          footer: {
-            type: 'box', layout: 'vertical',
-            contents: [{
-              type: 'button',
-              action: { type: 'uri', label: 'ลองเปิดวิดีโอด้วยตัวเอง', uri: url },
-              style: 'primary',
-              height: 'sm'
-            }]
-          }
-        }
-      };
-      return errorMessage;
+      return { type: 'text', text: 'ขออภัยครับ เล้งไม่สามารถประมวลผลลิงก์ YouTube นี้ได้ในขณะนี้' };
     }
   }
 }
