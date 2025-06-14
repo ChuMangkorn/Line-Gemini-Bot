@@ -15,63 +15,77 @@
       color: #e2e8f0;
       font-family: 'Inter', sans-serif;
     }
+
     .stat-card {
       background-color: #1e293b;
       border: 1px solid #334155;
       transition: all 0.3s ease;
     }
+
     .date-btn {
       background-color: #334155;
       color: #cbd5e1;
       transition: all 0.2s ease;
     }
+
     .date-btn.active {
       background-color: #0ea5e9;
       color: white;
       font-weight: 600;
     }
+
     .date-btn:hover:not(.active) {
       background-color: #475569;
     }
+
     .modal-backdrop {
       background-color: rgba(0, 0, 0, 0.75);
       backdrop-filter: blur(4px);
     }
+
     .chat-message {
       display: flex;
       margin-bottom: 1rem;
       gap: 0.75rem;
     }
+
     .chat-message.user {
       justify-content: flex-end;
     }
+
     .chat-bubble {
       max-width: 75%;
       padding: 0.75rem 1rem;
       border-radius: 1.25rem;
       word-wrap: break-word;
     }
+
     .chat-bubble.user {
       background-color: #0284c7;
       color: white;
       border-bottom-right-radius: 0.25rem;
     }
+
     .chat-bubble.ai {
       background-color: #334155;
       color: #e2e8f0;
       border-bottom-left-radius: 0.25rem;
     }
+
     /* [ADD] สไตล์สำหรับข้อความแอดมิน */
     .chat-bubble.admin {
-      background-color: #047857; /* สีเขียว */
+      background-color: #047857;
+      /* สีเขียว */
       color: white;
       border-bottom-right-radius: 0.25rem;
     }
+
     .chat-avatar {
       width: 2.5rem;
       height: 2.5rem;
       border-radius: 9999px;
     }
+
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
   </style>
 </head>
@@ -145,8 +159,7 @@
 
       <div class="stat-card p-6 rounded-lg md:col-span-2">
         <h3 class="text-lg font-semibold text-white mb-4">📢 Broadcast Message</h3>
-        <textarea id="broadcast-message"
-          class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-white"
+        <textarea id="broadcast-message" class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-white"
           placeholder="Type a message to send to all users..."></textarea>
         <button id="send-broadcast-btn"
           class="mt-2 w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2">
@@ -157,7 +170,7 @@
       <div class="stat-card p-6 rounded-lg md:col-span-2">
         <h3 class="text-lg font-semibold text-white mb-4">Recent Errors</h3>
         <div id="error-log" class="text-sm space-y-2 overflow-y-auto max-h-48">
-            <p class="text-slate-400">Loading errors...</p>
+          <p class="text-slate-400">Loading errors...</p>
         </div>
       </div>
 
@@ -194,26 +207,29 @@
       </header>
       <div id="modal-body" class="p-4 sm:p-6 overflow-y-auto flex-grow"></div>
       <footer class="p-4 border-t border-slate-700 bg-slate-800/50">
-          <div class="flex items-center gap-2">
-              <textarea id="admin-reply-input" placeholder="Type a reply as admin..." class="flex-grow bg-slate-700 border border-slate-600 rounded-md p-2 text-white resize-none" rows="1"></textarea>
-              <button id="send-admin-reply-btn" class="bg-sky-600 hover:bg-sky-700 text-white font-bold p-2 rounded-md h-10 w-10 flex items-center justify-center shrink-0">
-                  <i data-lucide="send" class="w-5 h-5"></i>
-              </button>
-          </div>
+        <div class="flex items-center gap-2">
+          <textarea id="admin-reply-input" placeholder="Type a reply as admin..."
+            class="flex-grow bg-slate-700 border border-slate-600 rounded-md p-2 text-white resize-none"
+            rows="1"></textarea>
+          <button id="send-admin-reply-btn"
+            class="bg-sky-600 hover:bg-sky-700 text-white font-bold p-2 rounded-md h-10 w-10 flex items-center justify-center shrink-0">
+            <i data-lucide="send" class="w-5 h-5"></i>
+          </button>
+        </div>
       </footer>
     </div>
   </div>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getFirestore, collection, doc, onSnapshot, query, orderBy, getDocs, where, documentId } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { getFirestore, collection, doc, onSnapshot, query, orderBy, getDocs, getDoc, where, documentId } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
     import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
     (async function main() {
       try {
         const response = await fetch(window.location.origin + '/getFirebaseConfig');
         if (!response.ok) throw new Error(`Could not fetch Firebase config.`);
-        
+
         const firebaseConfig = await response.json();
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
@@ -222,23 +238,23 @@
         const ui = {
           loadingSpinner: document.getElementById('loading-spinner'),
           dashboardContent: document.getElementById('dashboard-content'),
-          lineEvents: document.getElementById('line-events'), 
+          lineEvents: document.getElementById('line-events'),
           geminiCalls: document.getElementById('gemini-calls'),
           errorCount: document.getElementById('error-count'),
           estCost: document.getElementById('est-cost'),
-          logBody: document.getElementById('conversation-log'), 
+          logBody: document.getElementById('conversation-log'),
           lastUpdated: document.getElementById('last-updated'),
-          searchInput: document.getElementById('search-log'), 
+          searchInput: document.getElementById('search-log'),
           modal: document.getElementById('log-modal'),
-          modalTitle: document.getElementById('modal-title'), 
+          modalTitle: document.getElementById('modal-title'),
           modalBody: document.getElementById('modal-body'),
-          closeModalBtn: document.getElementById('close-modal-btn'), 
+          closeModalBtn: document.getElementById('close-modal-btn'),
           modalUserAvatar: document.getElementById('modal-user-avatar'),
-          adminMenu: document.getElementById('admin-menu'), 
+          adminMenu: document.getElementById('admin-menu'),
           adminMenuButton: document.getElementById('admin-menu-button'),
-          adminDropdown: document.getElementById('admin-dropdown'), 
+          adminDropdown: document.getElementById('admin-dropdown'),
           adminAvatar: document.getElementById('admin-avatar'),
-          adminName: document.getElementById('admin-name'), 
+          adminName: document.getElementById('admin-name'),
           logoutBtn: document.getElementById('logout-btn'),
           dateRangeFilter: document.getElementById('date-range-filter'),
           broadcastMessage: document.getElementById('broadcast-message'),
@@ -261,20 +277,25 @@
         const userCache = new Map();
         let listenersInitialized = false;
 
-        onAuthStateChanged(auth, user => {
+        onAuthStateChanged(auth, async (user) => {
           if (user) {
             if (!listenersInitialized) {
               ui.adminName.textContent = user.displayName || user.email;
               ui.adminAvatar.src = user.photoURL || `https://placehold.co/40x40/64748b/e2e8f0?text=${(user.email || 'A').charAt(0)}`;
+              ui.adminMenu.classList.remove('hidden');
               ui.loadingSpinner.classList.add('hidden');
               ui.dashboardContent.classList.remove('hidden');
-              initDashboard();
+              initAndListenForChanges();
+              fetchDataForRange('today');
+
               listenersInitialized = true;
             }
-          } else { window.location.href = window.location.origin + '/login'; }
+          } else {
+            window.location.href = window.location.origin + '/login';
+          }
         });
 
-        let statsListener = null; 
+        let statsListener = null;
         function fetchDataForRange(range) {
           const endDate = moment().format('YYYY-MM-DD');
           let startDate;
@@ -295,7 +316,7 @@
             updateDashboardUI(stats);
           }, error => console.error("Error fetching stats:", error));
         }
-        
+
         function updateDashboardUI(stats) {
           ui.lineEvents.textContent = (stats.totalLineEvents || 0).toLocaleString();
           ui.geminiCalls.textContent = (stats.totalGeminiHits || 0).toLocaleString();
@@ -314,64 +335,75 @@
           activityChart.update();
           ui.lastUpdated.textContent = moment().format('HH:mm:ss');
         }
-
-        function initDashboard() {
-          fetchDataForRange('today');
+        function initAndListenForChanges() {
           fetchAndRenderErrors();
-          setInterval(fetchAndRenderErrors, 60000);
-
           const convQuery = query(collection(db, "conversations"), orderBy("lastUpdated", "desc"));
-          onSnapshot(convQuery, snapshot => {
+          onSnapshot(convQuery, async (snapshot) => {
+            console.log("Conversation data updated. Re-evaluating profiles...");
             allConversations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            allConversations.forEach(convo => {
-              if (!userCache.has(convo.id)) {
-                const userProfileRef = doc(db, "users", convo.id, "profile", "info");
-                onSnapshot(userProfileRef, profileDoc => {
-                  userCache.set(convo.id, profileDoc.exists() ? profileDoc.data() : { displayName: `User...${convo.id.slice(-4)}` });
-                  renderConversations();
-                });
-              }
-            });
+
+            const missingUserIds = allConversations
+              .map(convo => convo.id)
+              .filter(id => !userCache.has(id));
+
+            if (missingUserIds.length > 0) {
+              console.log(`Found ${missingUserIds.length} new users. Fetching profiles...`);
+
+              const profilePromises = missingUserIds.map(userId =>
+                getDoc(doc(db, "users", userId, "profile", "info"))
+              );
+
+              const profileDocs = await Promise.all(profilePromises);
+
+              profileDocs.forEach((profileDoc, index) => {
+                const userId = missingUserIds[index];
+                const defaultProfile = { displayName: `User...${userId.slice(-6)}`, pictureUrl: '' };
+                userCache.set(userId, profileDoc.exists() ? profileDoc.data() : defaultProfile);
+              });
+              console.log("Profiles cached successfully.");
+            }
+
             renderConversations();
           });
         }
-        
         function renderConversations() {
-            const searchTerm = ui.searchInput.value.toLowerCase();
-            const filtered = allConversations.filter(convo => {
-                const user = userCache.get(convo.id);
-                const lastMessage = convo.messages?.slice(-1)[0] || {};
-                return !searchTerm || convo.id.toLowerCase().includes(searchTerm) ||
-                    user?.displayName.toLowerCase().includes(searchTerm) ||
-                    lastMessage.userMessage?.toLowerCase().includes(searchTerm) ||
-                    lastMessage.aiResponse?.toLowerCase().includes(searchTerm);
-            });
-            ui.logBody.innerHTML = filtered.slice(0, 100).map(convo => {
-                const user = userCache.get(convo.id) || { displayName: `...${convo.id.slice(-6)}`, pictureUrl: '' };
-                const lastMessage = convo.messages?.slice(-1)[0] || { userMessage: '', aiResponse: '' };
-                const placeholderImg = `https://placehold.co/40x40/334155/e2e8f0?text=${(user.displayName || '?').charAt(0)}`;
-                const lastUpdatedText = convo.lastUpdated ? moment(convo.lastUpdated.toDate()).fromNow() : 'N/A';
-                return `
-                 <tr class="border-b border-slate-700 hover:bg-slate-800/50">
-                     <td class="p-3">
-                         <div class="flex items-center">
-                            <img src="${user.pictureUrl || placeholderImg}" class="w-8 h-8 rounded-full mr-3" onerror="this.src='${placeholderImg}'">
-                            <div><p class="font-medium text-white">${user.displayName}</p><p class="text-xs text-slate-400">${lastUpdatedText}</p></div>
-                         </div>
-                     </td>
-                     <td class="p-3 text-slate-300 max-w-xs truncate" title="${lastMessage.userMessage}">${lastMessage.userMessage || '...'}</td>
-                     <td class="p-3 text-slate-300 max-w-xs truncate" title="${lastMessage.aiResponse}">${lastMessage.aiResponse || '...'}</td>
-                     <td class="p-3 text-center">
-                         <button class="view-log-btn text-sky-400 hover:text-sky-300 text-xs font-semibold py-1 px-2 rounded-md bg-sky-500/10 hover:bg-sky-500/20" data-userid="${convo.id}">View Log</button>
-                     </td>
-                 </tr>`;
-            }).join('') || `<tr><td colspan="4" class="text-center p-4 text-slate-400">No conversations found.</td></tr>`;
+          const searchTerm = ui.searchInput.value.toLowerCase();
+          const filtered = allConversations.filter(convo => {
+            const user = userCache.get(convo.id);
+            const lastMessage = convo.messages?.slice(-1)[0] || {};
+            return !searchTerm || convo.id.toLowerCase().includes(searchTerm) ||
+              (user && user.displayName.toLowerCase().includes(searchTerm)) || // <-- เพิ่มการตรวจสอบ user
+              lastMessage.userMessage?.toLowerCase().includes(searchTerm) ||
+              lastMessage.aiResponse?.toLowerCase().includes(searchTerm);
+          });
+
+          ui.logBody.innerHTML = filtered.slice(0, 100).map(convo => {
+            const user = userCache.get(convo.id) || { displayName: `...${convo.id.slice(-6)}`, pictureUrl: '' };
+            const lastMessage = convo.messages?.slice(-1)[0] || { userMessage: 'No messages yet.', aiResponse: '' };
+            const placeholderImg = `https://placehold.co/40x40/334155/e2e8f0?text=${(user.displayName || '?').charAt(0)}`;
+            return `
+                        <tr class="border-b border-slate-700 hover:bg-slate-800/50">
+                            <td class="p-3">
+                                <div class="flex items-center">
+                                    <img src="${user.pictureUrl || placeholderImg}" class="w-8 h-8 rounded-full mr-3" onerror="this.src='${placeholderImg}'">
+                                    <p class="font-medium text-white">${user.displayName}</p>
+                                </div>
+                            </td>
+                            <td class="p-3 text-slate-300 max-w-xs truncate" title="${lastMessage.userMessage}">${lastMessage.userMessage}</td>
+                            <td class="p-3 text-slate-400 max-w-xs truncate" title="${lastMessage.aiResponse}">${lastMessage.aiResponse}</td>
+                            <td class="p-3 text-center">
+                                <button class="view-log-btn text-sky-400 hover:text-sky-300 text-xs font-semibold py-1 px-2 rounded-md bg-sky-500/10 hover:bg-sky-500/20" data-userid="${convo.id}">View Log</button>
+                            </td>
+                        </tr>
+                    `;
+          }).join('');
+
         }
 
         let currentUnsubscribe;
         function openLogModal(userId) {
           if (currentUnsubscribe) currentUnsubscribe();
-          
+
           ui.modal.dataset.currentUserId = userId; // [ADD] เก็บ userId ปัจจุบันไว้
 
           const user = userCache.get(userId) || { displayName: `User ...${userId.slice(-6)}` };
@@ -385,15 +417,15 @@
           currentUnsubscribe = onSnapshot(convoDocRef, doc => {
             if (!doc.exists() || !doc.data().messages) { ui.modalBody.innerHTML = '<p class="text-slate-400">No history found.</p>'; return; }
             const messages = doc.data().messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-            
+
             ui.modalBody.innerHTML = messages.map(msg => {
               const userAvatarHtml = `<img src="${user.pictureUrl || placeholderImg}" class="chat-avatar" onerror="this.src='${placeholderImg}'">`;
               const aiAvatarHtml = `<img src="https://firebasestorage.googleapis.com/v0/b/ryuestai.appspot.com/o/logo_leng.png?alt=media&token=16a24559-994f-4d56-a36a-f5a89f9e7421" class="chat-avatar">`;
               const adminAvatarHtml = `<img src="${ui.adminAvatar.src}" class="chat-avatar">`;
-              
+
               // [UPDATE] ตรรกะการแสดงผลข้อความ
               if (msg.userMessage === '[Message from Admin]') {
-                 return `<div class="chat-message user">
+                return `<div class="chat-message user">
                             <div class="chat-bubble admin">
                                 <p>${msg.aiResponse}</p>
                                 <time class="text-xs text-emerald-200 mt-1 block">${moment(msg.timestamp).format('HH:mm')}</time>
@@ -413,20 +445,20 @@
             ui.modalBody.scrollTop = ui.modalBody.scrollHeight;
           });
         }
-        
+
         async function fetchAndRenderErrors() {
-            try {
-                const response = await fetch('/api/getErrors');
-                if (!response.ok) { ui.errorLog.innerHTML = '<p>Could not load errors.</p>'; return; }
-                const errors = await response.json();
-                if (errors.length === 0) { ui.errorLog.innerHTML = '<p class="text-slate-400">No errors recorded.</p>'; return; }
-                ui.errorLog.innerHTML = errors.map(err => `
+          try {
+            const response = await fetch('/api/getErrors');
+            if (!response.ok) { ui.errorLog.innerHTML = '<p>Could not load errors.</p>'; return; }
+            const errors = await response.json();
+            if (errors.length === 0) { ui.errorLog.innerHTML = '<p class="text-slate-400">No errors recorded.</p>'; return; }
+            ui.errorLog.innerHTML = errors.map(err => `
                     <div class="border-b border-slate-700/50 pb-2 mb-2">
                         <p class="font-semibold text-red-400 truncate" title="${err.message}">${err.message}</p>
                         <p class="text-slate-400">Context: ${err.context?.location || 'N/A'}</p>
                         <p class="text-slate-500 text-xs">${moment(err.timestamp).fromNow()}</p>
                     </div>`).join('');
-            } catch (error) { console.error('Failed to fetch errors:', error); }
+          } catch (error) { console.error('Failed to fetch errors:', error); }
         }
 
         // --- Event Listeners ---
@@ -439,56 +471,57 @@
         document.addEventListener('click', e => { if (!ui.adminMenu.contains(e.target)) ui.adminDropdown.classList.add('hidden'); });
         ui.logoutBtn.addEventListener('click', async () => { try { await signOut(auth); await fetch(window.location.origin + '/sessionLogout', { method: 'POST' }); window.location.href = window.location.origin + '/login'; } catch (error) { console.error('Logout failed:', error); } });
         ui.dateRangeFilter.addEventListener('click', e => { if (e.target.tagName === 'BUTTON' && !e.target.classList.contains('active')) { document.querySelector('.date-btn.active').classList.remove('active'); e.target.classList.add('active'); fetchDataForRange(e.target.dataset.range); } });
-        
+
         ui.sendBroadcastBtn.addEventListener('click', async () => {
-            const message = ui.broadcastMessage.value.trim();
-            if (!message) return alert('Broadcast message cannot be empty.');
-            if (!confirm(`Are you sure you want to broadcast this message to all users?\n\n"${message}"`)) return;
-            const originalButtonHTML = ui.sendBroadcastBtn.innerHTML;
-            ui.sendBroadcastBtn.disabled = true;
-            ui.sendBroadcastBtn.innerHTML = '<i data-lucide="loader-circle" class="w-4 h-4 animate-spin"></i> Sending...';
-            lucide.createIcons();
-            try {
-                const response = await fetch('/api/sendBroadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
-                const result = await response.json();
-                if (response.ok) { alert(result.message); ui.broadcastMessage.value = ''; }
-                else { throw new Error(result.error || 'Unknown error'); }
-            } catch (error) { alert(`Broadcast failed: ${error.message}`);
-            } finally { ui.sendBroadcastBtn.disabled = false; ui.sendBroadcastBtn.innerHTML = originalButtonHTML; lucide.createIcons(); }
+          const message = ui.broadcastMessage.value.trim();
+          if (!message) return alert('Broadcast message cannot be empty.');
+          if (!confirm(`Are you sure you want to broadcast this message to all users?\n\n"${message}"`)) return;
+          const originalButtonHTML = ui.sendBroadcastBtn.innerHTML;
+          ui.sendBroadcastBtn.disabled = true;
+          ui.sendBroadcastBtn.innerHTML = '<i data-lucide="loader-circle" class="w-4 h-4 animate-spin"></i> Sending...';
+          lucide.createIcons();
+          try {
+            const response = await fetch('/api/sendBroadcast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+            const result = await response.json();
+            if (response.ok) { alert(result.message); ui.broadcastMessage.value = ''; }
+            else { throw new Error(result.error || 'Unknown error'); }
+          } catch (error) {
+            alert(`Broadcast failed: ${error.message}`);
+          } finally { ui.sendBroadcastBtn.disabled = false; ui.sendBroadcastBtn.innerHTML = originalButtonHTML; lucide.createIcons(); }
         });
 
         // [ADD] Event listener for Admin Reply Button
         ui.sendAdminReplyBtn.addEventListener('click', async () => {
-            const userId = ui.modal.dataset.currentUserId;
-            const message = ui.adminReplyInput.value.trim();
-            if (!message || !userId) return;
+          const userId = ui.modal.dataset.currentUserId;
+          const message = ui.adminReplyInput.value.trim();
+          if (!message || !userId) return;
 
-            const originalButtonHTML = ui.sendAdminReplyBtn.innerHTML;
-            ui.sendAdminReplyBtn.disabled = true;
-            ui.adminReplyInput.disabled = true;
-            ui.sendAdminReplyBtn.innerHTML = '<i data-lucide="loader-circle" class="w-5 h-5 animate-spin"></i>';
-            lucide.createIcons();
+          const originalButtonHTML = ui.sendAdminReplyBtn.innerHTML;
+          ui.sendAdminReplyBtn.disabled = true;
+          ui.adminReplyInput.disabled = true;
+          ui.sendAdminReplyBtn.innerHTML = '<i data-lucide="loader-circle" class="w-5 h-5 animate-spin"></i>';
+          lucide.createIcons();
 
-            try {
-                const response = await fetch('/api/adminReply', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId, message })
-                });
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Failed to send reply.');
-                }
-                ui.adminReplyInput.value = ''; // Clear input on success
-            } catch (error) {
-                console.error('Admin reply failed:', error);
-                alert(`Error: ${error.message}`);
-            } finally {
-                ui.sendAdminReplyBtn.disabled = false;
-                ui.adminReplyInput.disabled = false;
-                ui.sendAdminReplyBtn.innerHTML = originalButtonHTML;
-                lucide.createIcons();
+          try {
+            const response = await fetch('/api/adminReply', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId, message })
+            });
+            if (!response.ok) {
+              const error = await response.json();
+              throw new Error(error.error || 'Failed to send reply.');
             }
+            ui.adminReplyInput.value = ''; // Clear input on success
+          } catch (error) {
+            console.error('Admin reply failed:', error);
+            alert(`Error: ${error.message}`);
+          } finally {
+            ui.sendAdminReplyBtn.disabled = false;
+            ui.adminReplyInput.disabled = false;
+            ui.sendAdminReplyBtn.innerHTML = originalButtonHTML;
+            lucide.createIcons();
+          }
         });
 
         lucide.createIcons();

@@ -8,7 +8,7 @@ const LoadingManager = require('./libs/loadingManager');
 const fs = require('fs');
 const path = require('path');
 const cookieParser = require('cookie-parser');
-const { collection, query, where, getDocs, documentId, orderBy, limit } = require('firebase-admin/firestore');
+const { collection, query, where, getDocs, documentId, orderBy, limit, doc, getDoc, updateDoc, arrayUnion, serverTimestamp } = require('firebase-admin/firestore');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -138,46 +138,32 @@ exports.getFirebaseConfig = onRequest({
   }
 });
 
-exports.getStats = onRequest({ secrets: [] }, (req, res) => {
+exports.adminReply = onRequest({ secrets: [lineChannelAccessToken] }, (req, res) => {
+
   const handler = async (req, res) => {
+    const { userId, message } = req.body;
+
+    if (!userId || !message) {
+      return res.status(400).json({ error: 'userId and message are required.' });
+    }
+
+    const client = new Client({ channelAccessToken: lineChannelAccessToken.value() });
+    const langAI = new LangAI(adminUserId.value(), youtubeApiKey.value());
+
     try {
-      const { startDate, endDate } = req.query;
-      if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required.' });
 
-      const q = query(
-        db.collection('daily_stats'),
-        where(admin.firestore.FieldPath.documentId(), '>=', startDate),
-        where(admin.firestore.FieldPath.documentId(), '<=', endDate)
-      );
-      const snapshot = await q.get();
+      await client.pushMessage(userId, { type: 'text', text: message });
 
-      const aggregatedStats = {
-        totalLineEvents: 0, totalGeminiHits: 0,
-        processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0, youtubeProcessing: 0, errors: 0 },
-        dailyActivity: {}
-      };
+      await langAI.saveConversationContext(userId, '[Message from Admin]', message);
 
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        const dateId = doc.id;
-        if (!aggregatedStats.dailyActivity[dateId]) {
-          aggregatedStats.dailyActivity[dateId] = { lineOaEvents: 0, geminiApiHits: 0 };
-        }
-        aggregatedStats.dailyActivity[dateId].lineOaEvents += data.lineOaEvents || 0;
-        aggregatedStats.dailyActivity[dateId].geminiApiHits += data.geminiApiHits || 0;
-
-        aggregatedStats.totalLineEvents += data.lineOaEvents || 0;
-        aggregatedStats.totalGeminiHits += data.geminiApiHits || 0;
-        for (const key in aggregatedStats.processing) {
-          if (data[key]) aggregatedStats.processing[key] += data[key];
-        }
-      });
-      res.status(200).json(aggregatedStats);
+      res.status(200).json({ success: true, message: `Reply sent to ${userId}` });
     } catch (error) {
-      console.error("Error fetching stats:", error);
-      res.status(500).json({ error: 'Failed to get stats.' });
+      console.error("Error sending admin reply:", error);
+      await langAI.logError(error, { userId, location: 'adminReply' });
+      res.status(500).json({ error: 'Failed to send reply.' });
     }
   };
+
   cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
 
@@ -217,19 +203,19 @@ exports.sendBroadcast = onRequest({ secrets: [lineChannelAccessToken] }, (req, r
 });
 
 exports.getErrors = onRequest({ secrets: [] }, (req, res) => {
-    const handler = async (req, res) => {
-        try {
-            const errorsQuery = db.collection('errors').orderBy('timestamp', 'desc').limit(50);
-            const snapshot = await errorsQuery.get();
+  const handler = async (req, res) => {
+    try {
+      const errorsQuery = db.collection('errors').orderBy('timestamp', 'desc').limit(50);
+      const snapshot = await errorsQuery.get();
 
-            const errors = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, timestamp: doc.data().timestamp.toDate().toISOString() }));
-            res.status(200).json(errors);
-        } catch (error) {
-            console.error("Error fetching errors:", error);
-            res.status(500).json({ error: 'Failed to get errors.' });
-        }
-    };
-    cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+      const errors = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, timestamp: doc.data().timestamp.toDate().toISOString() }));
+      res.status(200).json(errors);
+    } catch (error) {
+      console.error("Error fetching errors:", error);
+      res.status(500).json({ error: 'Failed to get errors.' });
+    }
+  };
+  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
 
 

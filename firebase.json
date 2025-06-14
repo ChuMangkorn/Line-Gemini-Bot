@@ -47,10 +47,6 @@
         "function": "getFirebaseConfig"
       },
       {
-        "source": "/api/stats",
-        "function": "getStats"
-      },
-      {
         "source": "/api/blockUser",
         "function": "blockUser"
       },
@@ -61,6 +57,10 @@
       {
         "source": "/api/getErrors",
         "function": "getErrors"
+      },
+      {
+        "source": "/api/adminReply",
+        "function": "adminReply"
       },
       {
         "source": "/health",
