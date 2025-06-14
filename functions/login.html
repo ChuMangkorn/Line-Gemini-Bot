@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en" class="dark">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,6 +12,7 @@
         }
     </style>
 </head>
+
 <body class="flex items-center justify-center min-h-screen">
     <div class="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-lg shadow-lg">
         <div>
@@ -25,18 +27,23 @@
             <div class="rounded-md shadow-sm -space-y-px">
                 <div>
                     <label for="email-address" class="sr-only">Email address</label>
-                    <input id="email-address" name="email" type="email" autocomplete="email" required class="appearance-none rounded-none relative block w-full px-3 py-2 border border-slate-600 bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-sky-500 focus:border-sky-500 focus:z-10 sm:text-sm rounded-t-md" placeholder="Email address">
+                    <input id="email-address" name="email" type="email" autocomplete="email" required
+                        class="appearance-none rounded-none relative block w-full px-3 py-2 border border-slate-600 bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-sky-500 focus:border-sky-500 focus:z-10 sm:text-sm rounded-t-md"
+                        placeholder="Email address">
                 </div>
                 <div>
                     <label for="password" class="sr-only">Password</label>
-                    <input id="password" name="password" type="password" autocomplete="current-password" required class="appearance-none rounded-none relative block w-full px-3 py-2 border border-slate-600 bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-sky-500 focus:border-sky-500 focus:z-10 sm:text-sm rounded-b-md" placeholder="Password">
+                    <input id="password" name="password" type="password" autocomplete="current-password" required
+                        class="appearance-none rounded-none relative block w-full px-3 py-2 border border-slate-600 bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-sky-500 focus:border-sky-500 focus:z-10 sm:text-sm rounded-b-md"
+                        placeholder="Password">
                 </div>
             </div>
 
             <div id="error-message" class="text-red-400 text-sm hidden"></div>
 
             <div>
-                <button type="submit" id="submit-button" class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 focus:ring-offset-slate-800">
+                <button type="submit" id="submit-button"
+                    class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 focus:ring-offset-slate-800">
                     Sign in
                 </button>
             </div>
@@ -46,58 +53,60 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        
-        const firebaseConfig = {
-            // วาง firebaseConfig ของคุณที่นี่
-            apiKey: "AIzaSyBoZ5V8dnlQEpPxWBk47LLDH1c4UzOMHAw",
-            authDomain: "ryuestai.firebaseapp.com",
-            projectId: "ryuestai",
-            storageBucket: "ryuestai.firebasestorage.app",
-            messagingSenderId: "988307531263",
-            appId: "1:988307531263:web:5dec3f61ec3c113dfcb3ca",
-            measurementId: "G-X60N12YFQW"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-
-        const form = document.getElementById('login-form');
-        const errorMessageEl = document.getElementById('error-message');
-
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            errorMessageEl.classList.add('hidden');
-            const email = form.email.value;
-            const password = form.password.value;
-
+        async function initializeLogin() {
             try {
-                // 1. Sign in with Firebase Auth on the client
-                const userCredential = await signInWithEmailAndPassword(auth, email, password);
-                
-                // 2. Get the ID token
-                const idToken = await userCredential.user.getIdToken();
+                console.log('Fetching Firebase config...');
+                const response = await fetch('/getFirebaseConfig');
+                if (!response.ok) {
+                    throw new Error('Could not fetch Firebase config.');
+                }
+                const firebaseConfig = await response.json();
+                console.log('Successfully fetched Firebase config.');
 
-                // 3. Send the ID token to our /sessionLogin function to create a session cookie
-                const response = await fetch('/sessionLogin', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ idToken })
+                const app = initializeApp(firebaseConfig);
+                const auth = getAuth(app);
+                const form = document.getElementById('login-form');
+                const errorMessageEl = document.getElementById('error-message');
+
+                form.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    errorMessageEl.classList.add('hidden');
+                    const email = form.email.value;
+                    const password = form.password.value;
+
+                    try {
+                        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+                        const idToken = await userCredential.user.getIdToken();
+
+                        const sessionResponse = await fetch('/sessionLogin', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ idToken })
+                        });
+
+                        if (sessionResponse.ok) {
+                            window.location.assign('/dashboard');
+                        } else {
+                            const error = await sessionResponse.json();
+                            errorMessageEl.textContent = error.message || 'Login failed.';
+                            errorMessageEl.classList.remove('hidden');
+                        }
+                    } catch (error) {
+                        console.error("Login Error:", error);
+                        errorMessageEl.textContent = "Invalid email or password.";
+                        errorMessageEl.classList.remove('hidden');
+                    }
                 });
 
-                if (response.ok) {
-                    // 4. If successful, redirect to the dashboard
-                    window.location.assign('/dashboard');
-                } else {
-                    const error = await response.json();
-                    errorMessageEl.textContent = error.message || 'Login failed.';
-                    errorMessageEl.classList.remove('hidden');
-                }
             } catch (error) {
-                console.error("Login Error:", error);
-                errorMessageEl.textContent = "Invalid email or password.";
+                console.error("Initialization failed:", error);
+                const errorMessageEl = document.getElementById('error-message');
+                errorMessageEl.textContent = 'Failed to load app configuration. Please try again later.';
                 errorMessageEl.classList.remove('hidden');
             }
-        });
+        }
+        initializeLogin();
     </script>
 </body>
+
 </html>

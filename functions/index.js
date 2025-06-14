@@ -20,7 +20,7 @@ setGlobalOptions({
   cpu: 2
 });
 
-// --- Define Secrets ---
+// --- LINE & AI Secrets ---
 const lineChannelSecret = defineSecret('LINE_CHANNEL_SECRET');
 const lineChannelAccessToken = defineSecret('LINE_CHANNEL_ACCESS_TOKEN');
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
@@ -28,19 +28,24 @@ const openWeatherApiKey = defineSecret('OPENWEATHER_API_KEY');
 const adminUserId = defineSecret('ADMIN_USER_ID');
 const youtubeApiKey = defineSecret('YOUTUBE_API_KEY');
 
-// --- Global Variables ---
+// --- Web App Config Secrets ---
+const webApiKey = defineSecret('WEB_API_KEY');
+const webAuthDomain = defineSecret('WEB_AUTH_DOMAIN');
+const webProjectId = defineSecret('WEB_PROJECT_ID');
+const webStorageBucket = defineSecret('WEB_STORAGE_BUCKET');
+const webMessagingSenderId = defineSecret('WEB_MESSAGING_SENDER_ID');
+const webAppId = defineSecret('WEB_APP_ID');
+const webMeasurementId = defineSecret('WEB_MEASUREMENT_ID');
+
+
 const usedReplyTokens = new Set();
 const processedEvents = new Set();
 
-// --- Middleware for Dashboard Authentication ---
 const authenticate = async (req, res, next) => {
   const sessionCookie = req.cookies?.__session || '';
-  if (!sessionCookie) {
-    return res.redirect(302, '/login');
-  }
+  if (!sessionCookie) return res.redirect(302, '/login');
   try {
-    const decodedClaims = await admin.auth().verifySessionCookie(sessionCookie, true);
-    req.user = decodedClaims; 
+    req.user = await admin.auth().verifySessionCookie(sessionCookie, true);
     return next();
   } catch (error) {
     return res.redirect(302, '/login');
@@ -114,21 +119,23 @@ exports.sessionLogout = onRequest({ secrets: [] }, (req, res) => {
   res.redirect('/login');
 });
 
-exports.getFirebaseConfig = onRequest({ secrets: [] }, (req, res) => {
-  const handler = (req, res) => {
-    try {
-      const firebaseConfig = {
-        apiKey: process.env.FIREBASE_API_KEY, // Use environment variables
-        authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-        projectId: process.env.GCLOUD_PROJECT,
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-        messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-        appId: process.env.FIREBASE_APP_ID,
-      };
-      res.status(200).json(firebaseConfig);
-    } catch (error) { res.status(500).send("Error getting config."); }
-  };
-  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+exports.getFirebaseConfig = onRequest({
+  secrets: [webApiKey, webAuthDomain, webProjectId, webStorageBucket, webMessagingSenderId, webAppId, webMeasurementId]
+}, (req, res) => {
+  try {
+    res.status(200).json({
+      apiKey: webApiKey.value(),
+      authDomain: webAuthDomain.value(),
+      projectId: webProjectId.value(),
+      storageBucket: webStorageBucket.value(),
+      messagingSenderId: webMessagingSenderId.value(),
+      appId: webAppId.value(),
+      measurementId: webMeasurementId.value()
+    });
+  } catch (error) {
+    console.error("Error building Firebase config from Secrets:", error);
+    res.status(500).send("Error getting app configuration.");
+  }
 });
 
 exports.getStats = onRequest({ secrets: [] }, (req, res) => {
@@ -138,12 +145,12 @@ exports.getStats = onRequest({ secrets: [] }, (req, res) => {
       if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required.' });
 
       const q = query(
-        collection(db, 'daily_stats'),
-        where(documentId(), '>=', startDate),
-        where(documentId(), '<=', endDate)
+        db.collection('daily_stats'),
+        where(admin.firestore.FieldPath.documentId(), '>=', startDate),
+        where(admin.firestore.FieldPath.documentId(), '<=', endDate)
       );
+      const snapshot = await q.get();
 
-      const snapshot = await getDocs(q);
       const aggregatedStats = {
         totalLineEvents: 0, totalGeminiHits: 0,
         processing: { textProcessing: 0, imageProcessing: 0, audioProcessing: 0, videoProcessing: 0, fileProcessing: 0, locationProcessing: 0, youtubeProcessing: 0, errors: 0 },
@@ -210,19 +217,21 @@ exports.sendBroadcast = onRequest({ secrets: [lineChannelAccessToken] }, (req, r
 });
 
 exports.getErrors = onRequest({ secrets: [] }, (req, res) => {
-  const handler = async (req, res) => {
-    try {
-      const errorsQuery = query(collection(db, 'errors'), orderBy('timestamp', 'desc'), limit(50));
-      const snapshot = await getDocs(errorsQuery);
-      const errors = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, timestamp: doc.data().timestamp.toDate().toISOString() }));
-      res.status(200).json(errors);
-    } catch (error) {
-      console.error("Error fetching errors:", error);
-      res.status(500).json({ error: 'Failed to get errors.' });
-    }
-  };
-  cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
+    const handler = async (req, res) => {
+        try {
+            const errorsQuery = db.collection('errors').orderBy('timestamp', 'desc').limit(50);
+            const snapshot = await errorsQuery.get();
+
+            const errors = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, timestamp: doc.data().timestamp.toDate().toISOString() }));
+            res.status(200).json(errors);
+        } catch (error) {
+            console.error("Error fetching errors:", error);
+            res.status(500).json({ error: 'Failed to get errors.' });
+        }
+    };
+    cookieParser()(req, res, () => authenticate(req, res, () => handler(req, res)));
 });
+
 
 exports.health = onRequest({ secrets: [] }, (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
